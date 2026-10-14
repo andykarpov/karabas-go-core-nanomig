@@ -90,9 +90,9 @@ module nanomig (
    
 wire cpu_rst;
 wire [15:0] ram_din;
-wire uart_cts;
+wire uart_cts = 1'b0; // karabas: undriven, tied to 0
 wire uart_rts;
-wire uart_dsr;
+wire uart_dsr = 1'b0;
 wire uart_dtr;
 wire field1;
 wire lace;
@@ -238,12 +238,12 @@ cpu_wrapper cpu_wrapper
 	.chip_dtack   (chip_dtack      ),
 	.chip_ipl     (chip_ipl        ),
 
-	.fastchip_dout   (  ),
+	.fastchip_dout   ( 16'h0000 ), // karabas: inputs, were left open
 	.fastchip_sel    (  ),
 	.fastchip_lds    (  ),
 	.fastchip_uds    (  ),
 	.fastchip_rnw    (  ),
-	.fastchip_selack (  ),
+	.fastchip_selack ( 1'b0 ),
 	.fastchip_ready  ( 1'b0 ),
 	.fastchip_lw     (  ),
 

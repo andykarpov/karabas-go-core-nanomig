@@ -229,7 +229,8 @@ reg         chipready;
 wire        cpu_clkena_req = ~cpu_req | chipready | ramready | fastchip_ready;
 reg         cpu_clkena_d = 1'b0;
 wire        cpu_clkena = cpu_clkena_req & ~cpu_clkena_d;
-always @(posedge clk) cpu_clkena_d <= cpu_clkena;
+always @(posedge clk) cpu_clkena_d <= reset & cpu_clkena; // reset (active low) also clears an X in simulation
+wire        ipl_autovector = 1'b1; // karabas: ISim takes no constant on a vhdl port
 
 `ifdef ENABLE_TG68K
 TG68KdotC_Kernel
@@ -257,7 +258,7 @@ cpu_inst_p
   .clkena_in(cpu_clkena),
   .data_in(cpu_din),
   .ipl(cpu_ipl),
-  .ipl_autovector(1),
+  .ipl_autovector(ipl_autovector),
   .regin_out(),
   .addr_out(cpu_addr_p),
   .data_write(cpu_dout_p),

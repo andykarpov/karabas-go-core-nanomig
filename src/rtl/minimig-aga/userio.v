@@ -85,8 +85,8 @@ wire         _mright;       // right mouse buttons
 reg           joy1enable;   // joystick 1 enable (mouse/joy switch)
 wire         test_load;     // load test value to mouse counter
 wire  [15:0] test_data;     // mouse counter test value
-reg          cd32pad;
-reg          joy_swap;
+reg          cd32pad = 1'b0; // karabas: never set (no host interface)
+reg          joy_swap = 1'b0;
 
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
@@ -100,7 +100,7 @@ always @ (posedge clk) begin
 	end
 end
 
-reg        joy_ana_en;
+reg        joy_ana_en = 1'b0;
 reg [15:0] ajoy1,ajoy2;
 
 always @(posedge clk) begin

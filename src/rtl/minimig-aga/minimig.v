@@ -374,7 +374,7 @@ wire        _change;				//disk has been removed from drive
 wire        _ready;				//disk is ready
 wire        _wprot;				//disk is write-protected
 
-wire  [1:0] blver;
+wire  [1:0] blver = 2'b00; // karabas: no host interface, the undriven nets are tied to 0 (as Gowin does)
 wire        hbl, hde;
 assign      hblank = blver ? ~hde : hbl;
 
@@ -382,15 +382,15 @@ assign      hblank = blver ? ~hde : hbl;
 
 wire        bls;					//blitter slowdown - required for sharing bus cycles between Blitter and CPU
 
-wire        cpurst;
-wire        cpuhlt;
+wire        cpurst = 1'b0;
+wire        cpuhlt = 1'b0;
 
 wire        int7;					//int7 interrupt request from Action Replay
 wire  [2:0] _iplx;			   //interrupt request lines from Paula
 wire        sel_cart;			//Action Replay RAM select
 wire [15:0] cart_data_out;
 
-wire        usrrst;				//user reset from osd interface
+wire        usrrst = 1'b0;				//user reset from osd interface
 wire        hires;				//hires signal from Denise for interpolation filter enable in Amber
 
 //gayle stuff
@@ -404,11 +404,11 @@ wire	[7:0] bank;					//memory bank select
 reg         ntsc = NTSC;		//PAL/NTSC video mode selection
 
 // host interface
-wire        host_cs;
-wire [23:0] host_adr;
-wire        host_we;
-wire [ 1:0] host_bs;
-wire [15:0] host_wdat;
+wire        host_cs = 1'b0;
+wire [23:0] host_adr = 24'd0;
+wire        host_we = 1'b0;
+wire [ 1:0] host_bs = 2'b00;
+wire [15:0] host_wdat = 16'd0;
 wire [15:0] host_rdat;
 wire        host_ack;
 
