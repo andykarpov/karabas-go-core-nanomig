@@ -147,7 +147,7 @@ wire         ddfseq_match;
 // ECS: DDFSTOP = $E4 display data fetch not stopped
 
 
-always @ (posedge clk) begin
+always @ (posedge clk) begin : hde_gen // named: Verilog-2001 (ISE) allows declarations only in named blocks
 	reg [8:0] best_hdiwstrt, cur_hdiwstrt, prev_hdiwstrt;
 	reg [8:0] best_hdiwstop, cur_hdiwstop, prev_hdiwstop;
 	reg [10:0] d_hde;

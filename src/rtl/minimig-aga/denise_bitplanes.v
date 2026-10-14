@@ -173,7 +173,7 @@ reg [15:0] data16;
 always @(posedge clk) if (clk7_en) data16 <= data_in;
 
 //bitplane buffer register for plane 1
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk176
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL1DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -183,7 +183,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 2
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk186
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL2DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -193,7 +193,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 3
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk196
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL3DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -203,7 +203,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 4
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk206
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL4DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -213,7 +213,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 5
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk216
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL5DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -223,7 +223,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 6
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk226
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL6DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -233,7 +233,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 7
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk236
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL7DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin
@@ -243,7 +243,7 @@ always @(posedge clk) begin
 end
 
 //bitplane buffer register for plane 8
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_bitplanes_blk246
 	reg st;
 	if(clk7_en && reg_address_in[8:1] == BPL8DAT[8:1]) st <= 1;
 	if(st & clk7n_en) begin

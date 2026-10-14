@@ -96,7 +96,7 @@ always @(posedge clk)
   end
 
 // data register A
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_sprites_shifter_blk99
 	reg st;
 	if(clk7_en && aen && address==DATA) st <= 1;
 	if(st & clk7n_en) begin
@@ -106,7 +106,7 @@ always @(posedge clk) begin
 end
 
 // data register B
-always @(posedge clk) begin
+always @(posedge clk) begin : denise_sprites_shifter_blk109
 	reg st;
 	if(clk7_en && aen && address==DATB) st <= 1;
 	if(st & clk7n_en) begin

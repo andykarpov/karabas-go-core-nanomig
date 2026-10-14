@@ -98,7 +98,7 @@ end
 
 // gayle id register: reads 1->1->0->1 on MSB
 reg [1:0] gayleid_cnt;	// sequence counter
-always @(posedge clk) begin
+always @(posedge clk) begin : gayle_blk101
 	reg old_rd;
 	old_rd <= rd & sel_gayleid;
 

@@ -275,7 +275,7 @@ module minimig
 	input	      ide_read,
 	output [15:0] ide_readdata
 );
-`default_nettype none
+`default_nettype wire // ISE (Verilog-2001): no net type on the ports under 'none'
    
 //--------------------------------------------------------------------------------------
 
@@ -928,7 +928,7 @@ assign custom_data_out[15:0] = agnus_data_out[15:0]
 assign _cpu_reset = _rst;
 
 reg _rst;
-always @(posedge clk) begin
+always @(posedge clk) begin : minimig_blk931
 	reg r;
 	r <= ~(cpurst || sys_reset);
 	_rst <= r;

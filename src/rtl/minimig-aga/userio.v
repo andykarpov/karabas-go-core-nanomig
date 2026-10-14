@@ -321,7 +321,7 @@ reg  [ 7:0] ycount;
 reg  [ 7:0] mouse0scr;
 
 // mouse counters
-always @(posedge clk) begin
+always @(posedge clk) begin : userio_blk324
 	reg old_level;
 	reg wheel;
 	

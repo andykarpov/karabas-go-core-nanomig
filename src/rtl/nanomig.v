@@ -86,7 +86,7 @@ module nanomig (
    output        fastram_wr,
    input         fastram_ready
 );
-`default_nettype none
+`default_nettype wire // ISE (Verilog-2001): no net type on the ports under 'none'
    
 wire cpu_rst;
 wire [15:0] ram_din;
@@ -98,11 +98,11 @@ wire field1;
 wire lace;
 
 reg reset_d;
-always @(posedge clk_sys, posedge reset) begin
+always @(posedge clk_sys, posedge reset) begin : nanomig_blk101
         reg [7:0] reset_s;
         reg rs;
 
-        if(reset) reset_s <= '1;
+        if(reset) reset_s <= 8'hFF;
         else begin
                 reset_s <= reset_s << 1;
                 rs <= reset_s[7];
@@ -297,7 +297,7 @@ assign fastram_wr = (cpu_state[1:0]==2'b11) ? 1'b1 : 1'b0;
 // https://wiki.osdev.org/ATA_PIO_Mode
 
 // state of individual drives   
-reg [1:0] ide_drv_state [2];
+reg [1:0] ide_drv_state [0:1];
 localparam IDE_DRV_STATE_NONE    = 2'd0;  // no drive detected yet
 localparam IDE_DRV_STATE_MNT     = 2'd1;  // drive mounted, but not analyzed
 localparam IDE_DRV_STATE_PARSE   = 2'd2;  // parsing rdb block
@@ -367,20 +367,20 @@ assign sdc_wr[7:4] = { 2'b00, ide_sdc_wr };
 localparam DRIVES = 2;
    
 // default drive parameters. Should be taken from RDB sector 0   
-reg [15:0] cylinders[DRIVES];
-reg [15:0] sectors[DRIVES];
-reg [15:0] heads[DRIVES];
+reg [15:0] cylinders[0:DRIVES-1];
+reg [15:0] sectors[0:DRIVES-1];
+reg [15:0] heads[0:DRIVES-1];
 
 // total sectors could be calculated from cylinders * sectors * heads
 // which requires DSP units. Instead we simply use the image size
 // divided by 512
-reg [31:0] total_sectors[DRIVES];
+reg [31:0] total_sectors[0:DRIVES-1];
 
 // TODO:
 // - make sure we know which drive we are currently initializing
 // - use seperate state for both disks
    
-always @(posedge clk_sys) begin
+always @(posedge clk_sys) begin : nanomig_blk383
    integer drv;
 
    for(drv = 0; drv < DRIVES; drv = drv+1) begin
@@ -1024,7 +1024,7 @@ assign sdc_byte_out_data = ide_active?
 // whenever the address sent by SD card changes. This can then be used as a write
 // signal to minimigs ide interface.
 reg sdc_addr_toggle;   
-always @(posedge clk_sys) begin
+always @(posedge clk_sys) begin : nanomig_blk1027
    reg last_sdc_addr;   
    reg latch_data;   
    last_sdc_addr <= sdc_byte_addr[0];

@@ -165,7 +165,7 @@ reg    freeze_reg=0;
 assign freeze = freeze_reg;
 
 // generate a keystrobe which is valid exactly one clk cycle
-always @(posedge clk) begin
+always @(posedge clk) begin : ciaa_blk168
 	reg kms_levelD;
 	if (clk7n_en) begin
 		kms_levelD <= kms_level;
