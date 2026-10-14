@@ -200,31 +200,48 @@ reg	   fd_dma_sector_ready;
 reg	   fd_dma_buffer_trigger_wr;	      
 reg [7:0]  fd_dma_buffer_data_wr;
 reg	   fd_dma_is_writing;
+reg [7:0]  dbyte;                // temporary of an always block below (was a SystemVerilog
+                                 // block-local 'logic' declaration, not supported by ISE)
+
+// karabas: the sector buffer as two 256x8 block RAMs with one write and one synchronous read
+// port each. NanoMig accessed it from four places (two writes, one clocked and one
+// asynchronous read), which ISE can only build from flip-flops and LUTs (~4k FFs, ~8k LUTs).
+// The writes (sector data in / CPU data for a disk write) and the reads (to the fifo / sector
+// data out) are never active at the same time, so each pair shares one port.
+reg        buf_we_even, buf_we_odd;  // write requests from the state machine below (one clock late)
+reg  [7:0] buf_wa, buf_wd;
+wire [7:0] buf_ra = fd_dma_is_writing ? sdc_byte_addr[8:1] : (fifo_word_counter[7:0] - 8'd31);
+reg  [7:0] buf_q_even, buf_q_odd;
+reg        sdc_byte_addr0_d;
+
+always @(posedge clk) begin
+   if (buf_we_even) fd_dma_buf_even[buf_wa] <= buf_wd;
+   if (buf_we_odd)  fd_dma_buf_odd[buf_wa]  <= buf_wd;
+   buf_q_even <= fd_dma_buf_even[buf_ra];
+   buf_q_odd  <= fd_dma_buf_odd[buf_ra];
+   sdc_byte_addr0_d <= sdc_byte_addr[0];
+end
 
 // read data from fifo
 always @(posedge clk) begin
    if(!fd_dma_is_writing) begin
       if(clk7_en && fifo_wr) begin
-	 logic [7:0] fd_dma_rd_ptr = fifo_word_counter - 10'd31;  
-
-	 // permanently read 16 bits from the sector buffer
-	 // to be written to the FIFO
-	 fd_dma_buf_out <= { fd_dma_buf_even[fd_dma_rd_ptr],
-			     fd_dma_buf_odd[fd_dma_rd_ptr] };
+	 // permanently read 16 bits from the sector buffer to be written to the FIFO.
+	 // fifo_word_counter only changes with clk7_en, so the RAM has read the word at
+	 // fifo_word_counter - 31 in the clock before (the same word NanoMig read here).
+	 fd_dma_buf_out <= { buf_q_even, buf_q_odd };
       end
    end  else begin
       // The Amiga stores odd and even bits seperated on floppy disk.
       // Here they are recombined to be able to write them to sd card
       // as regular bytes.
-      sdc_byte_out_data <= sdc_byte_addr[0]?
-	   { fd_dma_buf_odd[sdc_byte_addr[8:1]][3],fd_dma_buf_even[sdc_byte_addr[8:1]][3],
-	     fd_dma_buf_odd[sdc_byte_addr[8:1]][2],fd_dma_buf_even[sdc_byte_addr[8:1]][2],
-	     fd_dma_buf_odd[sdc_byte_addr[8:1]][1],fd_dma_buf_even[sdc_byte_addr[8:1]][1],
-	     fd_dma_buf_odd[sdc_byte_addr[8:1]][0],fd_dma_buf_even[sdc_byte_addr[8:1]][0]}:
-	   { fd_dma_buf_odd[sdc_byte_addr[8:1]][7],fd_dma_buf_even[sdc_byte_addr[8:1]][7],
-	     fd_dma_buf_odd[sdc_byte_addr[8:1]][6],fd_dma_buf_even[sdc_byte_addr[8:1]][6],
-	     fd_dma_buf_odd[sdc_byte_addr[8:1]][5],fd_dma_buf_even[sdc_byte_addr[8:1]][5],
-	     fd_dma_buf_odd[sdc_byte_addr[8:1]][4],fd_dma_buf_even[sdc_byte_addr[8:1]][4]};      
+      // karabas: through the RAM read port this follows sdc_byte_addr two clocks later
+      // (NanoMig: one clock); the reader of sdc_byte_out_data has to allow for that.
+      sdc_byte_out_data <= sdc_byte_addr0_d?
+	   { buf_q_odd[3],buf_q_even[3], buf_q_odd[2],buf_q_even[2],
+	     buf_q_odd[1],buf_q_even[1], buf_q_odd[0],buf_q_even[0]}:
+	   { buf_q_odd[7],buf_q_even[7], buf_q_odd[6],buf_q_even[6],
+	     buf_q_odd[5],buf_q_even[5], buf_q_odd[4],buf_q_even[4]};
    end
 end
    
@@ -240,9 +257,11 @@ wire [3:0] fd_dma_wr_sec_next =  (fd_dma_wr_sec < 4'd10)?(fd_dma_wr_sec+4'd1):4'
 
 // state machine reading data received from sd card into the two sector buffers.
 // This buffer is split into an even and odd half
-always @(posedge clk) begin
+always @(posedge clk) begin : paula_floppy_blk245
    reg fd_dma_buffer_trigger_wrD;
    
+   buf_we_even <= 1'b0;
+   buf_we_odd <= 1'b0;
    if(reset) begin
       fd_dma_buf_wr_state <= 4'h0;
       sdc_rd <= 4'b0000;
@@ -302,9 +321,11 @@ always @(posedge clk) begin
 	   // write data into sector buffer and update checksum
 	   // write into lo/hi buffer to be able to read 16 bits from both buffers
 	   if(sdc_byte_in_strobe) begin
-	      if(sdc_byte_addr[0])  fd_dma_buf_odd[sdc_byte_addr[8:1]] <= sdc_byte_in_data;
-	      else                  fd_dma_buf_even[sdc_byte_addr[8:1]] <= sdc_byte_in_data;
-	      fd_dma_csum[sdc_byte_addr[1:0]] = 8'haa |
+	      buf_we_odd  <=  sdc_byte_addr[0];
+	      buf_we_even <= !sdc_byte_addr[0];
+	      buf_wa <= sdc_byte_addr[8:1];
+	      buf_wd <= sdc_byte_in_data;
+	      fd_dma_csum[sdc_byte_addr[1:0]] <= 8'haa | // was a blocking '=' (ISE rejects the mix)
 				     fd_dma_csum[sdc_byte_addr[1:0]] ^
 				     sdc_byte_in_data ^ {1'b0, sdc_byte_in_data[7:1]};
 
@@ -367,8 +388,10 @@ always @(posedge clk) begin
 	   // transfer data from FIFO into buffer odd/even sector buffer
 	   if(fd_dma_buffer_trigger_wr != fd_dma_buffer_trigger_wrD) begin
 	      // write byte to the buffer
-	      if(fd_dma_wr_ptr[8])  fd_dma_buf_even[fd_dma_wr_ptr[7:0]] <= fd_dma_buffer_data_wr;
-	      else                  fd_dma_buf_odd[fd_dma_wr_ptr[7:0]] <= fd_dma_buffer_data_wr;
+	      buf_we_even <=  fd_dma_wr_ptr[8];
+	      buf_we_odd  <= !fd_dma_wr_ptr[8];
+	      buf_wa <= fd_dma_wr_ptr[7:0];
+	      buf_wd <= fd_dma_buffer_data_wr;
 
 	      fd_dma_wr_ptr <= fd_dma_wr_ptr + 9'd1;	      
 	      fd_dma_buffer_trigger_wrD <= fd_dma_buffer_trigger_wr;
@@ -775,7 +798,7 @@ always @(posedge clk) begin
 	 
       else if(stbdat) begin
 	 // seperate data and ignore clock bits
-	 logic [7:0] dbyte = { fifo_out[14], fifo_out[12], fifo_out[10], fifo_out[8],
+	 dbyte = { fifo_out[14], fifo_out[12], fifo_out[10], fifo_out[8],
 			        fifo_out[6],  fifo_out[4],  fifo_out[2], fifo_out[0] };
 	 
 	 case(cpu_wr_state)
@@ -793,7 +816,7 @@ always @(posedge clk) begin
               if(((cpu_wr_cnt == 0) && (fifo_out != dsksync[15:0])) || (cpu_wr_cnt != 0)) begin
 		 cpu_wr_cnt <= cpu_wr_cnt + 9'd1;
 		 
-		 if(cpu_wr_cnt < 4) begin
+		 if(cpu_wr_cnt < 4) begin : paula_floppy_blk798
 		    // demux MFM bits into 32 bit value
 		    integer i;
 		    for(i = 0; i < 8; i = i + 1)
@@ -951,7 +974,7 @@ parameter DISKDMA_IDLE   = 2'b00;
 parameter DISKDMA_ACTIVE = 2'b10;
 parameter DISKDMA_INT    = 2'b11;
 
-always @(posedge clk) begin
+always @(posedge clk) begin : paula_floppy_blk956
    integer i;
 
    // mounting can happen during reset as well 
