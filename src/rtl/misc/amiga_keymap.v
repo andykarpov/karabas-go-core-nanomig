@@ -1,3 +1,4 @@
+`default_nettype wire // karabas: a file before it in the ISE project may set none
 /*
  amiga_keymap.v
  

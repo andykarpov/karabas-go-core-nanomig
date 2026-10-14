@@ -224,6 +224,9 @@ initial begin
 	dut.nanomig.minimig.AGNUS1.bc1.long_line = 1'b0;
 end
 
+always @(dut.kbd_mouse_level) $display("%t kbd/mouse event type %0d data %02x", $time, dut.kbd_mouse_type, dut.kbd_mouse_data);
+always @(dut.kbd_reset) $display("%t kbd_reset %b", $time, dut.kbd_reset);
+
 // ---------------- stimulus ----------------
 
 initial begin
@@ -242,6 +245,25 @@ initial begin
 		sram_hi[21'h80], sram_lo[21'h80], sram_hi[21'h81], sram_lo[21'h81]);
 	frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 	$display("%t init done", $time);
+	// keyboard: F12 (keyboard reset), as the firmware sends a report
+	#50000;
+	frame(8'h01, 8'h00, 8'h00);
+	frame(8'h01, 8'h01, 8'h45);
+	frame(8'h01, 8'h02, 8'h00);
+	frame(8'h01, 8'h03, 8'h00);
+	frame(8'h01, 8'h04, 8'h00);
+	frame(8'h01, 8'h05, 8'h00);
+	frame(8'h01, 8'h06, 8'h00);
+	#300000;
+	$display("%t kb_status %02x kbd_reset %b cpu_reset %b", $time, dut.kb_status, dut.kbd_reset, dut.cpu_reset);
+	frame(8'h01, 8'h01, 8'h00);
+	// mouse: x +5, y -3, left button
+	frame(8'h02, 8'h00, 8'h05);
+	frame(8'h02, 8'h01, 8'hFD);
+	frame(8'h02, 8'h02, 8'h00);
+	frame(8'h02, 8'h03, 8'h01);
+	#50000;
+	$display("%t ms %02x %02x b %b upd %b buttons %b", $time, dut.ms_x, dut.ms_y, dut.ms_b, dut.ms_upd, dut.mouse_buttons);
 end
 
 endmodule

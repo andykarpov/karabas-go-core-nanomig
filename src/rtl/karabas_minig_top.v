@@ -187,6 +187,10 @@ wire romloader_wr;
 wire [15:0] softsw_command, osd_command;
 wire mcu_busy;
 wire dvi_only;
+wire [7:0] kb_status, kb_dat0, kb_dat1, kb_dat2, kb_dat3, kb_dat4, kb_dat5;
+wire [7:0] ms_x, ms_y;
+wire [2:0] ms_b;
+wire ms_upd;
 
 // burst transfers from the mcu (karabas-go-firmware docs/burst_protocol.md)
 wire mcu_burst_ready;
@@ -207,6 +211,20 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.MCU_SPI_SD2_SS(MCU_IO[2]),
 	.MCU_BURST_CS_N(MCU_IO[0]),
 	.MCU_BURST_READY(mcu_burst_ready),
+
+	.MS_X(ms_x),
+	.MS_Y(ms_y),
+	.MS_B(ms_b),
+	.MS_Z(),
+	.MS_UPD(ms_upd),
+
+	.KB_STATUS(kb_status),
+	.KB_DAT0(kb_dat0),
+	.KB_DAT1(kb_dat1),
+	.KB_DAT2(kb_dat2),
+	.KB_DAT3(kb_dat3),
+	.KB_DAT4(kb_dat4),
+	.KB_DAT5(kb_dat5),
 
 	.RTC_A(8'h00),
 	.RTC_DI(8'h00),
@@ -246,6 +264,7 @@ reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
 reg       sw_reset = 1'b0;
+reg       sw_debug = 1'b1;     // input debug bar (karabas: until the osd overlay exists)
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
 always @(posedge clk_sys) begin
@@ -257,15 +276,48 @@ always @(posedge clk_sys) begin
 			8'h02: sw_slowmem <= softsw_command[1:0];
 			8'h03: sw_ntsc <= softsw_command[0];
 			8'h04: sw_reset <= softsw_command[0];
+			8'h05: sw_debug <= softsw_command[0];
 			default: ;
 		endcase
 	end
 end
 
+//---------- Keyboard and mouse ------------
+
+wire kbd_mouse_level;
+wire [1:0] kbd_mouse_type;
+wire [7:0] kbd_mouse_data;
+wire [2:0] mouse_buttons;
+wire kbd_reset;
+
+hid_amiga hid_amiga(
+	.clk(clk_sys),
+	.reset(areset),
+
+	.kb_status(kb_status),
+	.kb_dat0(kb_dat0),
+	.kb_dat1(kb_dat1),
+	.kb_dat2(kb_dat2),
+	.kb_dat3(kb_dat3),
+	.kb_dat4(kb_dat4),
+	.kb_dat5(kb_dat5),
+
+	.ms_x(ms_x),
+	.ms_y(ms_y),
+	.ms_b(ms_b),
+	.ms_upd(ms_upd),
+
+	.kbd_mouse_level(kbd_mouse_level),
+	.kbd_mouse_type(kbd_mouse_type),
+	.kbd_mouse_data(kbd_mouse_data),
+	.mouse_buttons(mouse_buttons),
+	.kbd_reset(kbd_reset)
+);
+
 //---------- Reset ------------
 
-// the Amiga is held in reset while the mcu loads the core roms
-wire cpu_reset_req = areset | mcu_busy | romloader_act | sw_reset;
+// the Amiga is held in reset while the mcu loads the core roms, and by Ctrl + Amiga + Amiga
+wire cpu_reset_req = areset | mcu_busy | romloader_act | sw_reset | kbd_reset;
 reg [15:0] reset_cnt = 16'hFFFF;
 always @(posedge clk_sys) begin
 	if (cpu_reset_req)
@@ -323,11 +375,10 @@ nanomig nanomig(
 	.audio_left(audio_left),
 	.audio_right(audio_right),
 
-	// no keyboard and mouse yet
-	.mouse_buttons(3'b000),
-	.kbd_mouse_level(1'b0),
-	.kbd_mouse_type(2'b00),
-	.kbd_mouse_data(8'h00),
+	.mouse_buttons(mouse_buttons),
+	.kbd_mouse_level(kbd_mouse_level),
+	.kbd_mouse_type(kbd_mouse_type),
+	.kbd_mouse_data(kbd_mouse_data),
 	.joystick0(8'h00),
 	.joystick1(8'h00),
 
@@ -471,10 +522,26 @@ end
 
 wire video_de = (hcnt >= H_START) && (hcnt < H_START + 720) && (vcnt >= V_START) && (vcnt < V_START + 576);
 
+// input debug bar in the top left corner: 16 squares, green = 1
+//   0-7  usb modifiers: lctrl lshift lalt lgui rctrl rshift ralt rgui
+//   8    a key in the usb report       9  kbd_mouse_level (toggles per event)
+//   10   mouse report (toggles)        11-13 mouse buttons l r m
+//   14   kbd_reset                     15 cpu reset
+wire [15:0] dbg_bits = { cpu_reset, kbd_reset, mouse_buttons[2], mouse_buttons[1], mouse_buttons[0], ms_upd,
+	kbd_mouse_level, (kb_dat0 != 8'h00), kb_status[7], kb_status[6], kb_status[5], kb_status[4],
+	kb_status[3], kb_status[2], kb_status[1], kb_status[0] };
+wire [10:0] dbg_x = hcnt - (H_START + 8);
+wire [9:0] dbg_y = vcnt - (V_START + 8);
+wire dbg_area = sw_debug && (hcnt >= H_START + 8) && (dbg_x < 11'd256) && (vcnt >= V_START + 8) && (dbg_y < 10'd12)
+	&& (dbg_x[3:0] < 4'd12);
+wire dbg_on = dbg_bits[dbg_x[7:4]];
+
 reg [23:0] hdmi_rgb;
 reg hdmi_hs, hdmi_vs, hdmi_de;
 always @(posedge clk_sys) begin
-	hdmi_rgb <= video_de ? { red, red, green, green, blue, blue } : 24'h000000;
+	hdmi_rgb <= !video_de ? 24'h000000 :
+	            dbg_area ? (dbg_on ? 24'h00E000 : 24'h602020) :
+	            { red, red, green, green, blue, blue };
 	hdmi_hs <= hs;
 	hdmi_vs <= vs;
 	hdmi_de <= video_de;

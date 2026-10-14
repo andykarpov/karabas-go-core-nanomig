@@ -40,7 +40,12 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
 - `src/rtl/karabas_minig_top.v`: the Mini G top. It holds the PLL (50 MHz to `clk_sys` 28.333 MHz), the `mcu` link, soft switches, the reset (held while the MCU is busy or loads ROMs), the SRAM controller, the HDMI data-enable window and the audio outputs.
   - **SRAM:** the two 2Mx8 chips form one 2Mx16 async SRAM. `MA = {ram_address[22], ram_address[20:1]}` maps chip RAM to 512 KB segments 0-3, slow RAM to 4-6 and Kickstart to 7 (byte 0x380000, the ROM address in `core_minig.json`). The access follows NanoMig's sdram timing within the 7 MHz cycle (`cyc` 0-3 after `clk7_en`). Minimig takes the read data at the cyc 2 edge, so it is latched at the cyc 1 edge. A clock later and the cpu gets the previous word (black screen). Even bytes are the high byte (`MD[15:8]`, `MWR_N[1]`).
   - **Video:** the Amber output (908x625 at 28 MHz, about 576p50) goes straight to `zhdmi_top`. Only the 720x576 DE window (`H_START`/`V_START`) is generated here.
-- Not wired yet: the keyboard/mouse/joysticks, the floppy/HDD images (the `sdc_*` interface) and the OSD overlay.
+  - **Keyboard and mouse:** `rtl/mcu/hid_amiga.v` turns the USB reports of the `mcu` link (`KB_STATUS`, `KB_DAT0..5`, `MS_*`) into Minimig `kbd_mouse_*` events.
+    - Keyboard: the report is compared with the previous one once it is stable for 200 us. The mcu sends a report as 7 frames. Codes go through NanoMig's `misc/amiga_keymap.v`.
+    - Key events are spaced about 1 ms apart, because CIA-A has no keyboard buffer. The PS/2 and XT scancodes of the mcu are not used: they carry typematic repeats, and AmigaOS repeats keys itself.
+    - Caps lock toggles like the Amiga key. F12 (no Amiga key) resets the Amiga while it is held.
+    - `src/sim/run_hid_sim.sh` is its unit test (seconds).
+- Not wired yet: the joysticks, the floppy/HDD images (the `sdc_*` interface) and the OSD overlay.
 - `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`.
 - `upstream/`: the NanoMig Tang Nano 20K top (`tang_nano20k_top.sv`) and README. They are a reference for how `nanomig` is wired up, not part of the build.
 
