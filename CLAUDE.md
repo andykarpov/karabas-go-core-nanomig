@@ -16,6 +16,19 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
 - The Kickstart is `src/roms/kick13.rom` (512 KB). It is not in git (copyright), so copy it there before `core`. `nanomig.kg3` contains it, so it is not committed either.
 - Check timing in `karabas_minig.par` ("All constraints were met") and utilization in `karabas_minig_map.mrp`. The design fills about 92% of the slices, so timing is route-dominated.
 
+## Simulation
+
+- `src/sim/run_sim.sh [time]` (default 3 ms) runs `tb_minig.v` in ISim. The testbench preloads `src/roms/kick13.rom` into a model of the two SRAM chips, tests the rom loader over the mcu spi link, sends `CMD_INIT_DONE` and prints the cpu bus cycles, writes to the custom chips, sram writes and the video chain. About 1 ms of simulated time takes a few minutes. Check `src/sim/build/fuse.log` for `ERROR` first.
+- The source list is `karabas_minig.prj` with these substitutions:
+  - `fifo.v`/`dpram.v` are replaced by VHDL models;
+  - `mcu.vhd` is wrapped by `mcu_sim_wrap.py`, because ISim leaves VHDL `buffer` ports undriven towards Verilog;
+  - hdmi is a stub, because the TMDS encoders stop ISim on X data.
+- ISim also differs from the FPGA in these ways:
+  - XST starts every flip-flop at 0, ISim at X, so registers without a reset have to be set in the testbench. The Agnus beam counter is the known case.
+  - Verilog constants on VHDL ports are illegal, so connect them through a wire.
+  - Undriven nets and open inputs are X. Tie them off in the RTL.
+- The testbench shortens two delays that are real on hardware: the `minimig_syscontrol` reset (4 frames) and the Kickstart 1.3 start delay loop (patched in the SRAM model only).
+
 ## Layout
 
 - `src/rtl/nanomig.v`: the Minimig wrapper (module `nanomig`). It holds the reset synchroniser, `amiga_clk`, `cpu_wrapper`, `minimig` and the Amber scan doubler (`dblscan` is tied to 1). Its ports are the interface a board top will connect to: `clk_sys` (28.6875 MHz, with `clk7_en`/`clk7n_en` enables), 4-bit RGB + sync, 15-bit audio, the config buses, keyboard/mouse/joysticks, a MiSTeryNano-style SD sector interface (`sdc_*`), the chip/slow RAM bus and the fast RAM bus.
@@ -25,7 +38,7 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
 - `src/rtl/amber/`: the scan doubler.
 - `src/rtl/misc/`: NanoMig's support modules (SD card, HID, OSD, SPI to the MCU, SDRAM, flash, ws2812, keymap). Most are written for the Tang Nano 20K and its companion MCU. They will need adapting or replacing for the Karabas Go MCU link before they go into a build. `ide_dpram.v` is the one written here (it replaces a Gowin primitive).
 - `src/rtl/karabas_minig_top.v`: the Mini G top. It holds the PLL (50 MHz to `clk_sys` 28.333 MHz), the `mcu` link, soft switches, the reset (held while the MCU is busy or loads ROMs), the SRAM controller, the HDMI data-enable window and the audio outputs.
-  - **SRAM:** the two 2Mx8 chips form one 2Mx16 async SRAM. `MA = {ram_address[22], ram_address[20:1]}` maps chip RAM to 512 KB segments 0-3, slow RAM to 4-6 and Kickstart to 7 (byte 0x380000, the ROM address in `core_minig.json`). The access follows NanoMig's sdram timing within the 7 MHz cycle (`cyc` 0-3 after `clk7_en`). Even bytes are the high byte (`MD[15:8]`, `MWR_N[1]`).
+  - **SRAM:** the two 2Mx8 chips form one 2Mx16 async SRAM. `MA = {ram_address[22], ram_address[20:1]}` maps chip RAM to 512 KB segments 0-3, slow RAM to 4-6 and Kickstart to 7 (byte 0x380000, the ROM address in `core_minig.json`). The access follows NanoMig's sdram timing within the 7 MHz cycle (`cyc` 0-3 after `clk7_en`). Minimig takes the read data at the cyc 2 edge, so it is latched at the cyc 1 edge. A clock later and the cpu gets the previous word (black screen). Even bytes are the high byte (`MD[15:8]`, `MWR_N[1]`).
   - **Video:** the Amber output (908x625 at 28 MHz, about 576p50) goes straight to `zhdmi_top`. Only the 720x576 DE window (`H_START`/`V_START`) is generated here.
 - Not wired yet: the keyboard/mouse/joysticks, the floppy/HDD images (the `sdc_*` interface) and the OSD overlay.
 - `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`.
