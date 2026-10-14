@@ -24,8 +24,8 @@
 //--------------------------------------------------------------------------//
 //--------------------------------------------------------------------------//
 
-// `define ENABLE_TG68K
-`define ENABLE_FX68K
+`define ENABLE_TG68K // karabas: TG68K (VHDL) synthesizes in ISE as is
+// `define ENABLE_FX68K
 
 `define TG68K_A24      // limit address space of TG68K to 24 bit
 
@@ -229,12 +229,13 @@ TG68KdotC_Kernel
 // verilator runs the verilog translated variant which doesn't support configuration but
 // is hard coded for full configurability (all configs set to 2)
 #(
-	.sr_read(2),        // 0=>user,   1=>privileged,    2=>switchable with CPU(0)
-	.vbr_stackframe(2), // 0=>no,     1=>yes/extended,  2=>switchable with CPU(0)
-	.extaddr_mode(2),   // 0=>no,     1=>yes,           2=>switchable with CPU(1)
-	.mul_mode(2),       // 0=>16Bit,  1=>32Bit,         2=>switchable with CPU(1),  3=>no MUL,
-	.div_mode(2),       // 0=>16Bit,  1=>32Bit,         2=>switchable with CPU(1),  3=>no DIV,
-	.bitfield(2)        // 0=>no,     1=>yes,           2=>switchable with CPU(1)
+	// karabas: a plain 68000 (Amiga 500) to fit the XC6SLX25; the 68020 features are not built
+	.sr_read(0),        // 0=>user,   1=>privileged,    2=>switchable with CPU(0)
+	.vbr_stackframe(0), // 0=>no,     1=>yes/extended,  2=>switchable with CPU(0)
+	.extaddr_mode(0),   // 0=>no,     1=>yes,           2=>switchable with CPU(1)
+	.mul_mode(0),       // 0=>16Bit,  1=>32Bit,         2=>switchable with CPU(1),  3=>no MUL,
+	.div_mode(0),       // 0=>16Bit,  1=>32Bit,         2=>switchable with CPU(1),  3=>no DIV,
+	.bitfield(0)        // 0=>no,     1=>yes,           2=>switchable with CPU(1)
 )
 `endif
 cpu_inst_p
@@ -399,7 +400,7 @@ reg [4:0] z3ram_base0;
 reg [3:0] z3ram_base1;
 reg       z3ram_ena0;
 reg       z3ram_ena1;
-always @(posedge clk) begin
+always @(posedge clk) begin : cpu_wrapper_blk402
 	reg old_uds;
 	old_uds <= chip_uds;
 
@@ -457,7 +458,7 @@ end
 reg [15:0] chipdout_i;
 reg  [2:0] ipl_i;
 reg        c_as,c_rw,c_uds,c_lds;
-always @(negedge clk, negedge reset) begin
+always @(negedge clk, negedge reset) begin : cpu_wrapper_blk460
 	reg [1:0] stage;
 	reg waitm;
 	reg ready;
