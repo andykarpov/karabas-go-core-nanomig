@@ -223,6 +223,14 @@ wire        longword;
 reg [2:0]   cpu_ipl;
 reg         chipready;
 
+// karabas: the TG68K ALU paths do not fit one 28 MHz clock on the XC6SLX25, so the cpu clock enable
+// is never active on two clocks in a row and the cpu-to-cpu paths have two clocks (multicycle in the
+// ucf). A ready pulse is never dropped: while the cpu waits for a bus cycle it has no clock enable.
+wire        cpu_clkena_req = ~cpu_req | chipready | ramready | fastchip_ready;
+reg         cpu_clkena_d = 1'b0;
+wire        cpu_clkena = cpu_clkena_req & ~cpu_clkena_d;
+always @(posedge clk) cpu_clkena_d <= cpu_clkena;
+
 `ifdef ENABLE_TG68K
 TG68KdotC_Kernel
 `ifndef VERILATOR
@@ -246,7 +254,7 @@ cpu_inst_p
 `else
   .nreset(reset),
 `endif
-  .clkena_in(~cpu_req | chipready | ramready | fastchip_ready),
+  .clkena_in(cpu_clkena),
   .data_in(cpu_din),
   .ipl(cpu_ipl),
   .ipl_autovector(1),
