@@ -41,3 +41,12 @@ src/iseconfig/
 src/webtalk*
 src/usage_statistics_webtalk.html
 src/sim/build/
+src/*.syr
+src/*.kg[123]
+src/roms/kick*.rom
+src/*.xml
+src/par_usage_statistics.html
+# build inputs (the patterns above hide them)
+!src/karabas_minig.prj
+!src/karabas_minig.xst
+!src/karabas_minig.ut
