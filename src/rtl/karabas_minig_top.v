@@ -16,7 +16,9 @@
 --   0x380000 (segment 7). The 68000 is big endian: even bytes go to the high byte (MD[15:8]).
 ------------------------------------------------------------------------------------------------------------------*/
 
-module karabas_minig_top (
+module karabas_minig_top #(
+	parameter RESET_DELAY = 16'hFFFF // clk_sys cycles of cpu reset after the mcu is ready
+) (
 	input wire CLK_50MHZ,
 
 	input wire TAPE_IN,
@@ -267,7 +269,7 @@ wire cpu_reset_req = areset | mcu_busy | romloader_act | sw_reset;
 reg [15:0] reset_cnt = 16'hFFFF;
 always @(posedge clk_sys) begin
 	if (cpu_reset_req)
-		reset_cnt <= 16'hFFFF;
+		reset_cnt <= RESET_DELAY;
 	else if (reset_cnt != 0)
 		reset_cnt <= reset_cnt - 16'd1;
 end
@@ -372,9 +374,11 @@ nanomig nanomig(
 // Minimig drives the address and the read/write request at the start of the cycle and takes the
 // read data at its end:
 //   cyc 0 edge: address and read output enable
-//   cyc 1 edge: write data and byte write strobes (low for two clocks)
-//   cyc 2 edge: read data latched (address out for ~70 ns, 10 ns SRAM)
+//   cyc 1 edge: read data latched (address out for ~35 ns, 10 ns SRAM); write data and byte
+//               write strobes (low for two clocks)
 //   cyc 3 edge: write strobes released
+// Minimig takes the read data at the cyc 2 edge (one clock later the cpu gets the data of the
+// previous read).
 reg [1:0] cyc = 2'd0;
 always @(posedge clk_sys) begin
 	if (clk7_en)
@@ -419,16 +423,14 @@ always @(posedge clk_sys) begin
 				sram_wr_n <= 2'b11;
 			end
 			2'd1: begin
+				if (sram_rd_n == 2'b00)
+					ram_din <= MD;
 				sram_d <= ram_dout;
 				if (!_ram_we) begin
 					sram_rd_n <= 2'b11;
 					sram_drive <= 1'b1;
 					sram_wr_n <= { _ram_bhe, _ram_ble };
 				end
-			end
-			2'd2: begin
-				if (sram_rd_n == 2'b00)
-					ram_din <= MD;
 			end
 			2'd3: begin
 				sram_wr_n <= 2'b11;
