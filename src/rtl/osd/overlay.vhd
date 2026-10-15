@@ -4,6 +4,12 @@ use IEEE.numeric_std.ALL;
 use IEEE.std_logic_unsigned.all;
 
 entity overlay is
+	generic (
+		-- karabas: osd position (overlay units: pixels of the halved 31 kHz line, lines of the
+		-- halved frame), from the start of the hsync / vsync pulse; tsconf uses 120 / 72
+		H_OFFSET : natural := 120;
+		V_OFFSET : natural := 72
+	);
 	port (
 		CLK		: in std_logic;
 		RGB_I 	: in std_logic_vector(23 downto 0);
@@ -78,8 +84,6 @@ architecture rtl of overlay is
 	 
 	 signal flash_cnt : std_logic_vector(7 downto 0);
 	 
-	 constant h_offset : natural := 120;
-	 constant v_offset : natural := 72;	 
 begin
 
 	hsync_pol <= '1';

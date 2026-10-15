@@ -12,8 +12,10 @@
 --   Minimig ram_address[22:1] uses the 512 KB segments 0-3 (chip RAM, $000000) and 12-15
 --   (slow RAM at $C00000, Kickstart at $F80000). MA = {ram_address[22], ram_address[20:1]}
 --   folds them into the 8 segments of the SRAM: chip RAM 0-3, slow RAM 4-6, Kickstart 7.
--- Kickstart: loaded by the MCU from the core file (core_minig.json) to SRAM byte address
---   0x380000 (segment 7). The 68000 is big endian: even bytes go to the high byte (MD[15:8]).
+-- Kickstart: loaded by the MCU from the SD card (an external rom of core_minig.json) to SRAM
+--   byte address 0x380000 (segment 7). A 256 KB Kickstart (1.2, 1.3) is mirrored in the upper half
+--   of the segment, as on the A500. The 68000 is big endian: even bytes go to the high byte
+--   (MD[15:8]).
 ------------------------------------------------------------------------------------------------------------------*/
 
 module karabas_minig_top #(
@@ -198,6 +200,9 @@ wire [15:0] img_sum;
 wire [23:0] img_q_di;
 wire [2:0] ms_b;
 wire ms_upd;
+wire [12:0] joy_l, joy_r;
+wire matrix_cmd_wr;
+wire [23:0] matrix_cmd;
 
 // mcu chip selects: low goes through at once, high only after 3 clocks high. A short spike on a
 // chip select (the sram outputs switch next to them all the time) reset the spi receivers in
@@ -244,6 +249,9 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.KB_DAT4(kb_dat4),
 	.KB_DAT5(kb_dat5),
 
+	.JOY_L(joy_l),
+	.JOY_R(joy_r),
+
 	.RTC_A(8'h00),
 	.RTC_DI(8'h00),
 	.RTC_DO(),
@@ -266,8 +274,8 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.FT_MISO(1'b1),
 	.SD2_MISO(1'b1),
 
-	.MATRIX_CMD(24'h000000),
-	.MATRIX_CMD_WR(1'b0),
+	.MATRIX_CMD(matrix_cmd),
+	.MATRIX_CMD_WR(matrix_cmd_wr),
 
 	.IMG_MOUNTED(img_mounted),
 	.IMG_SIZE(img_size),
@@ -288,15 +296,15 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 );
 
 //---------- Soft switches (the order of the osd items in core_minig.json) ------------
-// items 0 and 1 are the file mounters DF0 / DF1 (no switch)
+// items 0 and 1 are the file mounters DF0 / DF1 (no switch); Reset is always the last item
 
 reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
 reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
-reg       sw_reset = 1'b0;
-reg       sw_debug = 1'b1;     // input debug bar (karabas: until the osd overlay exists)
+reg       sw_debug = 1'b0;     // input debug bar
 reg       sw_wprot = 1'b1;     // floppy write protect
+reg       sw_reset = 1'b0;
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
 always @(posedge clk_sys) begin
@@ -307,9 +315,9 @@ always @(posedge clk_sys) begin
 			8'h03: sw_chipmem <= softsw_command[1:0];
 			8'h04: sw_slowmem <= softsw_command[1:0];
 			8'h05: sw_ntsc <= softsw_command[0];
-			8'h06: sw_reset <= softsw_command[0];
-			8'h07: sw_debug <= softsw_command[0];
-			8'h08: sw_wprot <= ~softsw_command[0]; // 0 = On
+			8'h06: sw_debug <= softsw_command[0];
+			8'h07: sw_wprot <= ~softsw_command[0]; // 0 = On
+			8'h08: sw_reset <= softsw_command[0];
 			default: ;
 		endcase
 	end
@@ -346,6 +354,17 @@ hid_amiga hid_amiga(
 	.mouse_buttons(mouse_buttons),
 	.kbd_reset(kbd_reset)
 );
+
+//---------- Joysticks ------------
+
+// mcu JOY_L / JOY_R: [0] connected, [1] up, [2] down, [3] left, [4] right, [5] start, [6] A,
+// [7] B, [8] C, [9] X, [10] Y, [11] Z, [12] mode.
+// nanomig joystick0 / joystick1: [7:0] fire4, fire3, fire2, fire, up, down, left, right.
+// joystick0 is Amiga port 2 (the joystick port), joystick1 port 1, which the usb mouse shares:
+// userio switches port 1 to the joystick on its fire button and back to the mouse on the left
+// mouse button.
+wire [7:0] joy0 = { joy_l[5], joy_l[8], joy_l[7], joy_l[6], joy_l[1], joy_l[2], joy_l[3], joy_l[4] };
+wire [7:0] joy1 = { joy_r[5], joy_r[8], joy_r[7], joy_r[6], joy_r[1], joy_r[2], joy_r[3], joy_r[4] };
 
 //---------- Reset ------------
 
@@ -420,8 +439,8 @@ nanomig nanomig(
 	.kbd_mouse_level(kbd_mouse_level),
 	.kbd_mouse_type(kbd_mouse_type),
 	.kbd_mouse_data(kbd_mouse_data),
-	.joystick0(8'h00),
-	.joystick1(8'h00),
+	.joystick0(joy0),
+	.joystick1(joy1),
 
 	.uart_tx(UART_TX),
 	.uart_rx(UART_RX),
@@ -520,6 +539,26 @@ reg [1:0]  sram_rd_n = 2'b11;
 // rom loader: one byte per ROMLOAD_WR, at least ~250 ns apart
 reg [1:0] ld_cnt = 2'd0;
 
+// a Kickstart loaded into the lower 256 KB of segment 7 only (1.2, 1.3) is mirrored into the
+// upper 256 KB: the A500 sees a 256 KB rom at both $F80000 and $FC0000. A 512 KB rom writes both
+// halves.
+reg kick_lo = 1'b0, kick_hi = 1'b0;
+wire kick_mirror = kick_lo & ~kick_hi;
+reg romloader_act_d = 1'b0;
+always @(posedge clk_sys) begin
+	romloader_act_d <= romloader_act;
+	if (romloader_act && !romloader_act_d) begin
+		kick_lo <= 1'b0;
+		kick_hi <= 1'b0;
+	end
+	else if (romloader_act && romloader_wr && romloader_addr[21:19] == 3'b111) begin
+		if (romloader_addr[18])
+			kick_hi <= 1'b1;
+		else
+			kick_lo <= 1'b1;
+	end
+end
+
 always @(posedge clk_sys) begin
 	if (romloader_act) begin
 		sram_rd_n <= 2'b11;
@@ -541,7 +580,7 @@ always @(posedge clk_sys) begin
 		ld_cnt <= 2'd0;
 		case (cyc)
 			2'd0: begin
-				sram_a <= { ram_a[22], ram_a[20:1] };
+				sram_a <= { ram_a[22], ram_a[20:19], ram_a[18] & ~(kick_mirror & ram_a[22] & ram_a[20] & ram_a[19]), ram_a[17:1] };
 				sram_rd_n <= _ram_oe ? 2'b11 : 2'b00;
 				sram_drive <= 1'b0;
 				sram_wr_n <= 2'b11;
@@ -625,9 +664,19 @@ end
 wire [15:0] audio_l = { audio_left, 1'b0 };
 wire [15:0] audio_r = { audio_right, 1'b0 };
 
-// osd overlay (menus of the mcu), on the 31 kHz picture before hdmi
+// level meters of the mcu
+audio_peaks audio_peaks(
+	.clk(clk_sys),
+	.audio_l(audio_l),
+	.audio_r(audio_r),
+	.cmd_wr(matrix_cmd_wr),
+	.cmd(matrix_cmd)
+);
+
+// osd overlay (menus of the mcu), on the 31 kHz picture before hdmi; 4 characters left of and one
+// row above the tsconf position (120 / 72)
 wire [23:0] osd_rgb;
-overlay overlay(
+overlay #(.H_OFFSET(120 - 4*8), .V_OFFSET(72 - 8)) overlay(
 	.CLK(clk_sys),
 	.RGB_I(hdmi_rgb),
 	.RGB_O(osd_rgb),

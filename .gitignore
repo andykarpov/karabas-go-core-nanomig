@@ -42,7 +42,7 @@ src/webtalk*
 src/usage_statistics_webtalk.html
 src/sim/build/
 src/*.syr
-src/*.kg[123]
+
 src/roms/kick*.rom
 src/*.xml
 src/par_usage_statistics.html
@@ -50,3 +50,9 @@ src/par_usage_statistics.html
 !src/karabas_minig.prj
 !src/karabas_minig.xst
 !src/karabas_minig.ut
+!src/karabas_go.prj
+!src/karabas_go.xst
+!src/karabas_go.ut
+!src/karabas_mini.prj
+!src/karabas_mini.xst
+!src/karabas_mini.ut

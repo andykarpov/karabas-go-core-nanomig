@@ -12,13 +12,14 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
 
 - `src/build_minig.sh` runs the ISE 14.7 command-line flow (it sources `/opt/Xilinx/14.7/ISE_DS/settings64.sh`). Run `./build_minig.sh xst`, `impl` or `core` for one step. With no argument it runs all of them. A full run takes about 30 min, mostly PAR.
 - Inputs: `karabas_minig.prj` (source list, add new files here), `karabas_minig.xst`, `karabas_minig.ucf`, `karabas_minig.ut`.
-- `core` packs `karabas_minig.bin` and the ROMs listed in `core_minig.json` into `nanomig.kg3` with `make_core.py`. The json order of the `osd` items is the index in the soft switch commands that `karabas_minig_top.v` decodes.
-- The Kickstart is `src/roms/kick13.rom` (512 KB). It is not in git (copyright), so copy it there before `core`. `nanomig.kg3` contains it, so it is not committed either.
-- Check timing in `karabas_minig.par` ("All constraints were met") and utilization in `karabas_minig_map.mrp`. The design fills about 92% of the slices, so timing is route-dominated.
+- `core` packs `karabas_minig.bin` and the ROMs listed in `core_minig.json` into `nanomig.kg3` with `make_core.py`. The json order of the `osd` items is the index in the soft switch commands that `karabas_minig_top.v` decodes. Reset stays the last item, so a new item goes before it and moves its index.
+- The Kickstart is an external rom (`"external": true` in `core_minig.json`): the core file holds only its name, `/amiga/kick13.rom`, and the firmware loads it from the SD card at core start. So `nanomig.kg3` has no copyrighted data and is committed as a release. `make_core.py` could not build external roms (it read the file and wrote a str); fixed here, the copy in karabas-go-tools still has the bug.
+- A 256 KB Kickstart (1.2, 1.3) loaded only into the lower half of SRAM segment 7 is mirrored into the upper half (`kick_mirror` in the top), as on the A500. A 512 KB file writes both halves.
+- Check timing in `karabas_minig.par` ("All constraints were met") and utilization in `karabas_minig_map.mrp`. The design fills about 98% of the slices (81% of the LUTs), so timing is route-dominated: clk_sys has about 0.8 ns of slack (build 26101600).
 
 ## Simulation
 
-- `src/sim/run_sim.sh [time]` (default 3 ms) runs `tb_minig.v` in ISim. The testbench preloads `src/roms/kick13.rom` into a model of the two SRAM chips, tests the rom loader over the mcu spi link, sends `CMD_INIT_DONE` and prints the cpu bus cycles, writes to the custom chips, sram writes and the video chain. About 1 ms of simulated time takes a few minutes. Check `src/sim/build/fuse.log` for `ERROR` first.
+- `src/sim/run_sim.sh [time]` (default 3 ms) runs `tb_minig.v` in ISim. It needs `src/roms/kick13.rom` (512 KB, not in git). The testbench preloads it into a model of the two SRAM chips, tests the rom loader over the mcu spi link, sends `CMD_INIT_DONE` and prints the cpu bus cycles, writes to the custom chips, sram writes and the video chain. About 1 ms of simulated time takes a few minutes. Check `src/sim/build/fuse.log` for `ERROR` first.
 - The source list is `karabas_minig.prj` with these substitutions:
   - `fifo.v`/`dpram.v` are replaced by VHDL models;
   - `mcu.vhd` is wrapped by `mcu_sim_wrap.py`, because ISim leaves VHDL `buffer` ports undriven towards Verilog;
@@ -45,7 +46,9 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
     - Key events are spaced about 1 ms apart, because CIA-A has no keyboard buffer. The PS/2 and XT scancodes of the mcu are not used: they carry typematic repeats, and AmigaOS repeats keys itself.
     - Caps lock toggles like the Amiga key. F12 (no Amiga key) resets the Amiga while it is held.
     - `src/sim/run_hid_sim.sh` is its unit test (seconds).
-  - **OSD:** `rtl/osd/overlay.vhd` (from karabas-go-core-tsconf) draws the mcu menus (`OSD_COMMAND`) over the 31 kHz picture, just before hdmi. It scales its counters by the measured line length.
+  - **OSD:** `rtl/osd/overlay.vhd` (from karabas-go-core-tsconf) draws the mcu menus (`OSD_COMMAND`) over the 31 kHz picture, just before hdmi. It scales its counters by the measured line length. Its position is the `H_OFFSET` / `V_OFFSET` generics (tsconf: 120 / 72; here 4 characters left and one row up).
+  - **Joysticks:** `JOY_L` of the mcu link is nanomig `joystick0`, Amiga port 2 (the joystick port); `JOY_R` is `joystick1`, port 1, shared with the usb mouse (userio switches to the joystick on its fire button, back to the mouse on the left mouse button). Fire = A, fire2 = B, fire3 = C, fire4 = start.
+  - **Audio peaks:** `rtl/mcu/audio_peaks.v` sends the peak of each channel every 2^19 clocks (18.5 ms) as `CMD_AUDIO_PEAKS_L/_R` through `MATRIX_CMD` of `mcu.vhd`, for the level meters of the firmware.
   - **Disk images:** `rtl/mcu/img_sdc.v` connects the file mounter of the mcu link (the `IMG_*` ports added to `mcu.vhd`, protocol in karabas-go-firmware `docs/protocol.md`, firmware branch `filemounter`) to the `sdc_*` sector interface of NanoMig.
     - Slot n is sdc index n: 0-3 floppies, 4-5 IDE. `core_minig.json` has DF0 / DF1 (`F` items, slots 0 / 1, `.adf`) as the first two OSD items, so the soft switch indices start at 2.
     - One request at a time. Write data is read `OUT_LATENCY` clocks after `sdc_byte_addr`. A request ends after a timeout if the firmware has no file mounter.
@@ -54,7 +57,7 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
     - A read sector goes into the `img_sdc` buffer and on to the floppy only once it is checked: `paula_floppy` takes its first byte 511 as the end of the sector and builds the MFM checksum from what it got, so the bytes of a failed try would reach the Amiga as a good sector. `run_img_sim.sh` models this.
     - `paula_floppy.v` (karabas change): a write dma goes on after `lenzero` until the fifo is empty. With the slow mcu writes the fifo holds the end of the track, which NanoMig dropped (lost sectors and a DSKBLK that never came).
     - Tests: `run_img_sim.sh` (`mcu.vhd` + `img_sdc.v` against a model of the firmware, incl. lost frames), `run_floppy_sim.sh <adf>` (track read at the real dma rate), `run_floppy_wr_sim.sh <adf>` (track write; `mfm_track.py` encodes the ADF track as trackdisk does, the sd model is slow now and then).
-- Not wired yet: the joysticks, and IDE images (the same path, `sdc` index 4-5, writes need a check of the IDE data latch).
+- Not wired yet: IDE images (the same path, `sdc` index 4-5, writes need a check of the IDE data latch).
 - `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`. `src/rtl/osd` comes from `karabas-go-core-tsconf`.
 - `upstream/`: the NanoMig Tang Nano 20K top (`tang_nano20k_top.sv`) and README. They are a reference for how `nanomig` is wired up, not part of the build.
 
