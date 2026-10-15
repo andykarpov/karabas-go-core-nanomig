@@ -297,7 +297,10 @@ always @(posedge clk) begin : paula_floppy_blk245
 	   end // if (dma_active && !sdc_busy && !lenzero && !dsklen[14])	
 	   
 	   // for a write the data has to be received from the CPU first
-	   if(dma_active && dsklen[14]) begin	     
+	   // karabas: a write goes on after the dma length ran out (lenzero): the sectors still in
+	   // the fifo have to be written too. With a slow sd card (the mcu) the fifo holds more than
+	   // the gap at the end of the track, and the dma ends (DSKBLK) only with an empty fifo.
+	   if(dmaen && enable && dsklen[14]) begin
 	      $display("paula_floppy.v: DMA write, lenzero = %0d, dsklen = %0d/%0d/%0d", 
 		       lenzero, dsklen[15], dsklen[14], dsklen[13:0]);
 
@@ -382,6 +385,8 @@ always @(posedge clk) begin : paula_floppy_blk245
 	   // wait for data to arrive from CPU
 	   if(cpu_wr_state != 4'd0)  // TODO: is == 3 more precise?
 	     fd_dma_buf_wr_state <= 4'd6;
+	   else if(!dmaen)            // karabas: the write dma is over
+	     fd_dma_buf_wr_state <= 4'd0;
 	end
 	
 	4'd6: begin
