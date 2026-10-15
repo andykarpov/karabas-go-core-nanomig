@@ -1,14 +1,14 @@
 {
     "id": "nanomig",
     "name": "Amiga 500 (NanoMig)",
-    "build": "26101600",
+    "build": "26101601",
     "bitstream": "karabas_minig.bin",
     "visible": true,
     "type": "osd",
     "order": 20,
     "eeprom_bank": 255,
     "roms": [
-        {"filename": "/amiga/kick13.rom", "address": 3670016, "external": true}
+        {"filename": "/amiga/kick.rom", "address": 3670016, "external": true}
     ],
     "osd": [
         {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1"},
@@ -19,6 +19,7 @@
         {"type": "S", "name": "Video", "options": ["PAL", "NTSC"], "default": 0},
         {"type": "S", "name": "Debug", "options": ["Off", "On"], "default": 0, "hotkey": "Menu+D"},
         {"type": "S", "name": "Write protect", "options": ["On", "Off"], "default": 0},
+        {"type": "S", "name": "HDD", "options": ["Off", "CF card"], "default": 0},
         {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}
     ]
 }

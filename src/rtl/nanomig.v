@@ -52,6 +52,16 @@ module nanomig (
    output	 uart_tx,
    input	 uart_rx,
 		 
+   // karabas: the CF card slot of the board (IDE drive of gayle_cf.v)
+   output [2:0]	 cf_a,
+   output [1:0]	 cf_cs_n,
+   output	 cf_rd_n,
+   output	 cf_wr_n,
+   output	 cf_reset_n,
+   output [15:0] cf_dout,
+   output	 cf_oe,
+   input [15:0]	 cf_din,
+
    // Interface MiSTeryNano sd card interface. This very simple connection allows the core
    // to request sectors from within a OSD selected image file
    input [7:0]	 sdc_img_mounted,
@@ -1191,7 +1201,16 @@ minimig minimig
 	.ide_write    ( ide_write       ),
 	.ide_writedata( ide_writedata   ),
 	.ide_read     ( ide_read        ),
-	.ide_readdata ( ide_readdata    )
+	.ide_readdata ( ide_readdata    ),
+
+	.cf_a         ( cf_a            ),
+	.cf_cs_n      ( cf_cs_n         ),
+	.cf_rd_n      ( cf_rd_n         ),
+	.cf_wr_n      ( cf_wr_n         ),
+	.cf_reset_n   ( cf_reset_n      ),
+	.cf_dout      ( cf_dout         ),
+	.cf_oe        ( cf_oe           ),
+	.cf_din       ( cf_din          )
 );
 
 Amber AMBER

@@ -128,12 +128,6 @@ assign BEEPER = 1'b0;
 assign UART_CTS = 1'b0;
 assign ESP_RESET_N = 1'bz;
 assign ESP_BOOT_N = 1'bz;
-assign WA = 3'b000;
-assign WCS_N = 2'b11;
-assign WRD_N = 1'b1;
-assign WWR_N = 1'b1;
-assign WRESET_N = 1'b0;
-assign WD = 16'bzzzzzzzzzzzzzzzz;
 assign SDR_BA = 2'b00;
 assign SDR_A = 13'd0;
 assign SDR_CLK = 1'b0;
@@ -334,6 +328,7 @@ reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
 reg       sw_debug = 1'b0;     // input debug bar
 reg       sw_wprot = 1'b1;     // floppy write protect
+reg       sw_hdd = 1'b0;       // 1 = the CF card is the IDE drive (Gayle), from the next reset on
 reg       sw_reset = 1'b0;
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
@@ -347,7 +342,8 @@ always @(posedge clk_sys) begin
 			8'h05: sw_ntsc <= softsw_command[0];
 			8'h06: sw_debug <= softsw_command[0];
 			8'h07: sw_wprot <= ~softsw_command[0]; // 0 = On
-			8'h08: sw_reset <= softsw_command[0];
+			8'h08: sw_hdd <= softsw_command[0];
+			8'h09: sw_reset <= softsw_command[0];
 			default: ;
 		endcase
 	end
@@ -434,7 +430,9 @@ wire [7:0] memory_config = { 4'b0000, sw_slowmem, sw_chipmem };
 wire [2:0] fastram_config = 3'b000;
 wire [3:0] floppy_config = { 2'b01, sw_wprot, 1'b0 }; // 2 drives (DF0, DF1), write protect, no turbo
 wire [3:0] video_config = 4'b0000; // Amber filters off, scanlines not built
-wire [5:0] ide_config = 6'b000000;
+wire [15:0] cf_dout;
+wire cf_oe;
+wire [5:0] ide_config = { 5'b00000, sw_hdd }; // Gayle on: the IDE drive is the CF card
 
 nanomig nanomig(
 	.clk_sys(clk_sys),
@@ -505,8 +503,20 @@ nanomig nanomig(
 	.fastram_dout(16'h0000),
 	.fastram_din(),
 	.fastram_wr(),
-	.fastram_ready(1'b0)
+	.fastram_ready(1'b0),
+
+	// the CF card slot: the IDE drive of Gayle (minimig-aga/gayle_cf.v)
+	.cf_a(WA),
+	.cf_cs_n(WCS_N),
+	.cf_rd_n(WRD_N),
+	.cf_wr_n(WWR_N),
+	.cf_reset_n(WRESET_N),
+	.cf_dout(cf_dout),
+	.cf_oe(cf_oe),
+	.cf_din(WD)
 );
+
+assign WD = cf_oe ? cf_dout : 16'bzzzzzzzzzzzzzzzz;
 
 //---------- Disk images (file mounter of the mcu) ------------
 
