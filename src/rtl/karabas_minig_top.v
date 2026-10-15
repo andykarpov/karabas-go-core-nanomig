@@ -189,8 +189,28 @@ wire mcu_busy;
 wire dvi_only;
 wire [7:0] kb_status, kb_dat0, kb_dat1, kb_dat2, kb_dat3, kb_dat4, kb_dat5;
 wire [7:0] ms_x, ms_y;
+wire [7:0] img_mounted;
+wire [63:0] img_size;
+wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
+wire [8:0] img_data_addr;
+wire [7:0] img_data, img_result;
+wire [15:0] img_sum;
+wire [23:0] img_q_di;
+wire queue_full;
+wire [15:0] dbg_rx_frames, dbg_pops;
 wire [2:0] ms_b;
 wire ms_upd;
+
+// mcu chip selects: low goes through at once, high only after 3 clocks high. A short spike on a
+// chip select (the sram outputs switch next to them all the time) reset the spi receivers in
+// the middle of a frame: the frame got lost in both directions.
+reg [2:0] mcu_cs_sync = 3'b111, mcu_burst_cs_sync = 3'b111;
+always @(posedge clk_sys) begin
+	mcu_cs_sync <= { mcu_cs_sync[1:0], MCU_CS_N };
+	mcu_burst_cs_sync <= { mcu_burst_cs_sync[1:0], MCU_IO[0] };
+end
+wire mcu_cs_n = MCU_CS_N & (&mcu_cs_sync);
+wire mcu_burst_cs_n = MCU_IO[0] & (&mcu_burst_cs_sync);
 
 // burst transfers from the mcu (karabas-go-firmware docs/burst_protocol.md)
 wire mcu_burst_ready;
@@ -206,10 +226,10 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.MCU_MOSI(MCU_MOSI),
 	.MCU_MISO(MCU_MISO),
 	.MCU_SCK(MCU_SCK),
-	.MCU_SS(MCU_CS_N),
+	.MCU_SS(mcu_cs_n),
 	.MCU_SPI_FT_SS(MCU_IO[3]),
 	.MCU_SPI_SD2_SS(MCU_IO[2]),
-	.MCU_BURST_CS_N(MCU_IO[0]),
+	.MCU_BURST_CS_N(mcu_burst_cs_n),
 	.MCU_BURST_READY(mcu_burst_ready),
 
 	.MS_X(ms_x),
@@ -251,6 +271,21 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.MATRIX_CMD(24'h000000),
 	.MATRIX_CMD_WR(1'b0),
 
+	.IMG_MOUNTED(img_mounted),
+	.IMG_SIZE(img_size),
+	.IMG_DATA_WR(img_data_wr),
+	.IMG_DATA_ADDR(img_data_addr),
+	.IMG_DATA(img_data),
+	.IMG_RESULT_WR(img_result_wr),
+	.IMG_RESULT(img_result),
+	.IMG_SUM(img_sum),
+	.IMG_Q_WR(img_q_wr),
+	.IMG_Q_DI(img_q_di),
+	.IMG_Q_ACK(img_q_ack),
+	.QUEUE_FULL(queue_full),
+	.DBG_RX_FRAMES(dbg_rx_frames),
+	.DBG_POPS(dbg_pops),
+
 	.HWID(),
 	.DVI_ONLY(dvi_only),
 
@@ -258,25 +293,28 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 );
 
 //---------- Soft switches (the order of the osd items in core_minig.json) ------------
+// items 0 and 1 are the file mounters DF0 / DF1 (no switch)
 
 reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
 reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
 reg       sw_reset = 1'b0;
-reg       sw_debug = 1'b1;     // input debug bar (karabas: until the osd overlay exists)
+reg       sw_debug = 1'b1;
+reg       sw_wprot = 1'b1;     // floppy write protect     // input debug bar (karabas: until the osd overlay exists)
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
 always @(posedge clk_sys) begin
 	if (prev_softsw_command != softsw_command) begin
 		prev_softsw_command <= softsw_command;
 		case (softsw_command[15:8])
-			8'h00: sw_chipset <= softsw_command[1:0];
-			8'h01: sw_chipmem <= softsw_command[1:0];
-			8'h02: sw_slowmem <= softsw_command[1:0];
-			8'h03: sw_ntsc <= softsw_command[0];
-			8'h04: sw_reset <= softsw_command[0];
-			8'h05: sw_debug <= softsw_command[0];
+			8'h02: sw_chipset <= softsw_command[1:0];
+			8'h03: sw_chipmem <= softsw_command[1:0];
+			8'h04: sw_slowmem <= softsw_command[1:0];
+			8'h05: sw_ntsc <= softsw_command[0];
+			8'h06: sw_reset <= softsw_command[0];
+			8'h07: sw_debug <= softsw_command[0];
+			8'h08: sw_wprot <= ~softsw_command[0]; // 0 = On
 			default: ;
 		endcase
 	end
@@ -329,6 +367,15 @@ wire cpu_reset = |reset_cnt;
 
 //---------- NanoMig ------------
 
+wire [7:0] sdc_img_mounted, sdc_rd, sdc_wr;
+wire [63:0] sdc_img_size;
+wire [31:0] sdc_sector;
+wire sdc_busy, sdc_done, sdc_byte_in_strobe;
+wire [8:0] sdc_byte_addr;
+wire [7:0] sdc_byte_in_data, sdc_byte_out_data;
+wire img_active;
+wire [7:0] img_dbg;
+
 wire clk7_en, clk7n_en;
 wire hs, vs;
 wire [3:0] red, green, blue;
@@ -342,7 +389,7 @@ reg  [15:0] ram_din;
 wire [5:0] chipset_config = { 1'b0, sw_chipset, sw_ntsc, 1'b0 };
 wire [7:0] memory_config = { 4'b0000, sw_slowmem, sw_chipmem };
 wire [2:0] fastram_config = 3'b000;
-wire [3:0] floppy_config = 4'b0000; // 1 drive, no write protect, no turbo
+wire [3:0] floppy_config = { 2'b01, sw_wprot, 1'b0 }; // 2 drives (DF0, DF1), write protect, no turbo
 wire [3:0] video_config = 4'b0000; // Amber filters off, scanlines not built
 wire [5:0] ide_config = 6'b000000;
 
@@ -385,18 +432,17 @@ nanomig nanomig(
 	.uart_tx(UART_TX),
 	.uart_rx(UART_RX),
 
-	// no disk images yet
-	.sdc_img_mounted(8'h00),
-	.sdc_img_size(64'd0),
-	.sdc_rd(),
-	.sdc_wr(),
-	.sdc_sector(),
-	.sdc_busy(1'b0),
-	.sdc_done(1'b0),
-	.sdc_byte_in_strobe(1'b0),
-	.sdc_byte_addr(9'd0),
-	.sdc_byte_in_data(8'h00),
-	.sdc_byte_out_data(),
+	.sdc_img_mounted(sdc_img_mounted),
+	.sdc_img_size(sdc_img_size),
+	.sdc_rd(sdc_rd),
+	.sdc_wr(sdc_wr),
+	.sdc_sector(sdc_sector),
+	.sdc_busy(sdc_busy),
+	.sdc_done(sdc_done),
+	.sdc_byte_in_strobe(sdc_byte_in_strobe),
+	.sdc_byte_addr(sdc_byte_addr),
+	.sdc_byte_in_data(sdc_byte_in_data),
+	.sdc_byte_out_data(sdc_byte_out_data),
 
 	.ram_data(ram_dout),
 	.ramdata_in(ram_din),
@@ -417,6 +463,42 @@ nanomig nanomig(
 	.fastram_din(),
 	.fastram_wr(),
 	.fastram_ready(1'b0)
+);
+
+//---------- Disk images (file mounter of the mcu) ------------
+
+img_sdc img_sdc(
+	.clk(clk_sys),
+	.reset(areset),
+
+	.img_mounted(img_mounted),
+	.img_size(img_size),
+	.img_data_wr(img_data_wr),
+	.img_data_addr(img_data_addr),
+	.img_data(img_data),
+	.img_result_wr(img_result_wr),
+	.img_result(img_result),
+	.img_sum(img_sum),
+	.img_q_wr(img_q_wr),
+	.img_q_di(img_q_di),
+	.img_q_ack(img_q_ack),
+	.dbg_rx_frames(dbg_rx_frames),
+	.dbg_pops(dbg_pops),
+
+	.sdc_img_mounted(sdc_img_mounted),
+	.sdc_img_size(sdc_img_size),
+	.sdc_rd(sdc_rd),
+	.sdc_wr(sdc_wr),
+	.sdc_sector(sdc_sector),
+	.sdc_busy(sdc_busy),
+	.sdc_done(sdc_done),
+	.sdc_byte_in_strobe(sdc_byte_in_strobe),
+	.sdc_byte_addr(sdc_byte_addr),
+	.sdc_byte_in_data(sdc_byte_in_data),
+	.sdc_byte_out_data(sdc_byte_out_data),
+
+	.active(img_active),
+	.dbg(img_dbg)
 );
 
 //---------- SRAM ------------
@@ -522,19 +604,27 @@ end
 
 wire video_de = (hcnt >= H_START) && (hcnt < H_START + 720) && (vcnt >= V_START) && (vcnt < V_START + 576);
 
-// input debug bar in the top left corner: 16 squares, green = 1
+// input debug bar in the top left corner: 2 rows of 16 squares, green = 1
+// row 1:
 //   0-7  usb modifiers: lctrl lshift lalt lgui rctrl rshift ralt rgui
 //   8    a key in the usb report       9  kbd_mouse_level (toggles per event)
 //   10   mouse report (toggles)        11-13 mouse buttons l r m
 //   14   kbd_reset                     15 cpu reset
+// row 2 (disk images):
+//   0-3  img_sdc state                 4-5 its retries of the request
+//   6    sdc_busy                      7  floppy read request DF0   8 floppy write request DF0
+//   9    img_q_wr (a frame waits for the queue)   10 the reply queue to the mcu is full
 wire [15:0] dbg_bits = { cpu_reset, kbd_reset, mouse_buttons[2], mouse_buttons[1], mouse_buttons[0], ms_upd,
 	kbd_mouse_level, (kb_dat0 != 8'h00), kb_status[7], kb_status[6], kb_status[5], kb_status[4],
 	kb_status[3], kb_status[2], kb_status[1], kb_status[0] };
+wire [15:0] dbg_bits2 = { 5'd0, queue_full, img_q_wr, sdc_wr[0], sdc_rd[0], sdc_busy, img_dbg[5:0] };
 wire [10:0] dbg_x = hcnt - (H_START + 8);
 wire [9:0] dbg_y = vcnt - (V_START + 8);
-wire dbg_area = sw_debug && (hcnt >= H_START + 8) && (dbg_x < 11'd256) && (vcnt >= V_START + 8) && (dbg_y < 10'd12)
-	&& (dbg_x[3:0] < 4'd12);
-wire dbg_on = dbg_bits[dbg_x[7:4]];
+wire dbg_row2 = (dbg_y >= 10'd16);
+wire [9:0] dbg_yr = dbg_row2 ? dbg_y - 10'd16 : dbg_y;
+wire dbg_area = sw_debug && (hcnt >= H_START + 8) && (dbg_x < 11'd256) && (vcnt >= V_START + 8) && (dbg_y < 10'd28)
+	&& (dbg_yr < 10'd12) && (dbg_x[3:0] < 4'd12);
+wire dbg_on = dbg_row2 ? dbg_bits2[dbg_x[7:4]] : dbg_bits[dbg_x[7:4]];
 
 reg [23:0] hdmi_rgb;
 reg hdmi_hs, hdmi_vs, hdmi_de;

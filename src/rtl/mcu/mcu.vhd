@@ -103,6 +103,22 @@ entity mcu is
 	 HWID : out std_logic_vector(7 downto 0) := (others => '0');
 	 DVI_ONLY : out std_logic := '0';
 	 
+	 -- file mounter (karabas-go-firmware docs/protocol.md, IMG_* commands)
+	 IMG_MOUNTED   : out std_logic_vector(7 downto 0) := (others => '0'); -- one clock: new IMG_SIZE of the slot
+	 IMG_SIZE      : out std_logic_vector(63 downto 0) := (others => '0');
+	 IMG_DATA_WR   : out std_logic := '0'; -- one clock: a byte of the sector read
+	 IMG_DATA_ADDR : out std_logic_vector(8 downto 0) := (others => '0');
+	 IMG_DATA      : out std_logic_vector(7 downto 0) := (others => '0');
+	 IMG_RESULT_WR : out std_logic := '0'; -- one clock: end of a request
+	 IMG_RESULT    : out std_logic_vector(7 downto 0) := (others => '0'); -- 1 done, 2 error
+	 IMG_SUM       : out std_logic_vector(15 downto 0) := (others => '0'); -- 16-bit sum of the sector read
+	 IMG_Q_WR      : in std_logic := '0'; -- a frame to the mcu (request, write data), held until IMG_Q_ACK
+	 IMG_Q_DI      : in std_logic_vector(23 downto 0) := (others => '0');
+	 IMG_Q_ACK     : buffer std_logic := '0';
+	 QUEUE_FULL    : out std_logic := '0'; -- debug: the reply queue to the mcu is full
+	 DBG_RX_FRAMES : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: frames received
+	 DBG_POPS      : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: reply words taken
+
 	 -- busy
 	 BUSY: buffer std_logic := '1'
 	 
@@ -124,6 +140,12 @@ architecture rtl of mcu is
 	-- 11, 12 - usb gamepad, joy : todo
 
 	constant CMD_OSD 			: std_logic_vector(7 downto 0) := x"20";
+	constant CMD_IMG_SLOT     : std_logic_vector(7 downto 0) := x"40";
+	constant CMD_IMG_SIZE     : std_logic_vector(7 downto 0) := x"41";
+	constant CMD_IMG_LBA      : std_logic_vector(7 downto 0) := x"42";
+	constant CMD_IMG_SEC      : std_logic_vector(7 downto 0) := x"43";
+	constant CMD_IMG_BUF_BANK : std_logic_vector(7 downto 0) := x"44";
+	constant CMD_IMG_BUF_DATA : std_logic_vector(7 downto 0) := x"45";
 	constant CMD_CAPS		: std_logic_vector(7 downto 0) := x"F7";
 	constant CMD_HW_SETUP	: std_logic_vector(7 downto 0) := x"F9";
 	constant CMD_RTC 			: std_logic_vector(7 downto 0) := x"FA";
@@ -187,6 +209,13 @@ architecture rtl of mcu is
 	signal burst_addr       : std_logic_vector(31 downto 0);
 	signal burst_data       : std_logic_vector(7 downto 0);
 	signal burst_wr         : std_logic;
+
+	-- file mounter
+	signal img_slot         : std_logic_vector(7 downto 0) := (others => '0');
+	signal img_size_tmp     : std_logic_vector(63 downto 0) := (others => '0');
+	signal img_bank         : std_logic_vector(7 downto 0) := (others => '0');
+	signal dbg_rx_cnt       : unsigned(15 downto 0) := (others => '0');
+	signal dbg_pop_cnt      : unsigned(15 downto 0) := (others => '0');
 		 
 begin
 	
@@ -274,6 +303,9 @@ begin
 	process (CLK, spi_do_valid, spi_do, prev_spi_do_valid)
 	begin
 		if (rising_edge(CLK)) then
+			IMG_MOUNTED <= (others => '0');
+			IMG_DATA_WR <= '0';
+			IMG_RESULT_WR <= '0';
 			prev_spi_do_valid <= spi_do_valid;
 			if spi_do_valid = '1' and prev_spi_do_valid = '0' then
 				case spi_do(23 downto 16) is 
@@ -405,6 +437,37 @@ begin
 							caps_req <= not caps_req;
 						end if;
 
+					-- file mounter: image of a slot (size 0 = none), sector data, result
+					when CMD_IMG_SLOT => img_slot <= spi_do(7 downto 0);
+					when CMD_IMG_SIZE =>
+						case spi_do(15 downto 8) is
+							when x"00" => img_size_tmp(7 downto 0) <= spi_do(7 downto 0);
+							when x"01" => img_size_tmp(15 downto 8) <= spi_do(7 downto 0);
+							when x"02" => img_size_tmp(23 downto 16) <= spi_do(7 downto 0);
+							when x"03" => img_size_tmp(31 downto 24) <= spi_do(7 downto 0);
+							when x"04" => img_size_tmp(39 downto 32) <= spi_do(7 downto 0);
+							when x"05" => img_size_tmp(47 downto 40) <= spi_do(7 downto 0);
+							when x"06" => img_size_tmp(55 downto 48) <= spi_do(7 downto 0);
+							when x"07" =>
+								IMG_SIZE <= spi_do(7 downto 0) & img_size_tmp(55 downto 0);
+								IMG_MOUNTED(to_integer(unsigned(img_slot(2 downto 0)))) <= '1';
+							when others => null;
+						end case;
+					when CMD_IMG_LBA => -- mcu -> fpga: the sum of the sector read, before the result
+						case spi_do(15 downto 8) is
+							when x"00" => IMG_SUM(7 downto 0) <= spi_do(7 downto 0);
+							when x"01" => IMG_SUM(15 downto 8) <= spi_do(7 downto 0);
+							when others => null;
+						end case;
+					when CMD_IMG_SEC =>
+						IMG_RESULT <= spi_do(7 downto 0);
+						IMG_RESULT_WR <= '1';
+					when CMD_IMG_BUF_BANK => img_bank <= spi_do(7 downto 0);
+					when CMD_IMG_BUF_DATA =>
+						IMG_DATA_ADDR <= img_bank(0) & spi_do(15 downto 8);
+						IMG_DATA <= spi_do(7 downto 0);
+						IMG_DATA_WR <= '1';
+
 					-- nope
 					when CMD_NOPE => null;
 					
@@ -418,6 +481,11 @@ begin
 				if burst_type = CMD_ROMDATA then
 					ROMLOAD_ADDR <= burst_addr;
 					ROMLOAD_DATA <= burst_data;
+				end if;
+				if burst_type = CMD_IMG_BUF_DATA then
+					IMG_DATA_ADDR <= burst_addr(8 downto 0);
+					IMG_DATA <= burst_data;
+					IMG_DATA_WR <= '1';
 				end if;
 			end if;
 		end if;
@@ -500,11 +568,28 @@ begin
 		din 		=> queue_di
 	);
 	
+	QUEUE_FULL <= queue_wr_full;
+	DBG_RX_FRAMES <= std_logic_vector(dbg_rx_cnt);
+	DBG_POPS <= std_logic_vector(dbg_pop_cnt);
+
+	process (CLK)
+	begin
+		if rising_edge(CLK) then
+			if spi_do_valid = '1' and prev_spi_do_valid = '0' then
+				dbg_rx_cnt <= dbg_rx_cnt + 1;
+			end if;
+			if queue_rd_req = '1' then
+				dbg_pop_cnt <= dbg_pop_cnt + 1;
+			end if;
+		end if;
+	end process;
+
 	-- fifo handling / queue commands to mcu side
 	process(CLK)
 	begin
 		if rising_edge(CLK) then
 			queue_wr_req <= '0';
+			IMG_Q_ACK <= '0';
 			if caps_req /= caps_ack then -- answer the capability query
 				queue_wr_req <= '1';
 				queue_di <= CMD_CAPS & CAPS & CAPS_MAX_MHZ;
@@ -519,6 +604,11 @@ begin
          elsif MATRIX_CMD_WR = '1' then -- send matrix cmd
 				queue_wr_req <= '1';
 				queue_di <= MATRIX_CMD;
+			elsif IMG_Q_WR = '1' and IMG_Q_ACK = '0' and queue_wr_full = '0' then -- file mounter frame
+				-- not in the clock after an ack: the sender is just putting up its next frame
+				queue_wr_req <= '1';
+				queue_di <= IMG_Q_DI;
+				IMG_Q_ACK <= '1';
 			elsif queue_rd_empty = '1' then -- anti-empty queue
 				queue_wr_req <= '1';
 				queue_di <= CMD_NOPE & x"0000";
