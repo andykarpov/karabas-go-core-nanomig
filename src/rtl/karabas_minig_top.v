@@ -197,7 +197,7 @@ wire [7:0] img_data, img_result;
 wire [15:0] img_sum;
 wire [23:0] img_q_di;
 wire queue_full;
-wire [15:0] dbg_rx_frames, dbg_pops;
+wire [15:0] dbg_rx_frames, dbg_pops, dbg_cs_falls, dbg_cut, dbg_burst_pops;
 wire [2:0] ms_b;
 wire ms_upd;
 
@@ -285,6 +285,9 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.QUEUE_FULL(queue_full),
 	.DBG_RX_FRAMES(dbg_rx_frames),
 	.DBG_POPS(dbg_pops),
+	.DBG_CS_FALLS(dbg_cs_falls),
+	.DBG_CUT(dbg_cut),
+	.DBG_BURST_POPS(dbg_burst_pops),
 
 	.HWID(),
 	.DVI_ONLY(dvi_only),
@@ -484,6 +487,9 @@ img_sdc img_sdc(
 	.img_q_ack(img_q_ack),
 	.dbg_rx_frames(dbg_rx_frames),
 	.dbg_pops(dbg_pops),
+	.dbg_cs_falls(dbg_cs_falls),
+	.dbg_cut(dbg_cut),
+	.dbg_burst_pops(dbg_burst_pops),
 
 	.sdc_img_mounted(sdc_img_mounted),
 	.sdc_img_size(sdc_img_size),

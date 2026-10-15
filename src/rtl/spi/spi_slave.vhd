@@ -335,7 +335,11 @@ begin
                     sh_next <= (others => '0');                         -- load null data (output '0' if no load)
                 end if;
             when 0 =>
-                di_req <= not wren_ack_reg;                             -- will request data if shifter empty
+                -- karabas: no request in idle. sh_reg and wren_ack_reg follow sck also while the slave
+                -- is not selected (bursts on their own chip select, a short spike on this one), so a
+                -- request here took a reply word from the queue that never went out. The request of
+                -- states PREFETCH+2..1 takes each word once it is sent.
+                di_req <= '0';
                 do_transfer_next <= '0';                                -- clear signal transfer to do_buffer
                 spi_miso_o <= di_reg(N-1);                              -- shift out first tx bit from the MSb
                 if CPHA = '0' then

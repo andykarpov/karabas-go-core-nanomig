@@ -55,6 +55,9 @@ module img_sdc #(
 	input wire img_q_ack,
 	input wire [15:0] dbg_rx_frames,
 	input wire [15:0] dbg_pops,
+	input wire [15:0] dbg_cs_falls,
+	input wire [15:0] dbg_cut,
+	input wire [15:0] dbg_burst_pops,
 
 	// nanomig
 	output reg [7:0] sdc_img_mounted = 8'd0,
@@ -100,6 +103,12 @@ localparam S_RETRY3 = 5'd13;
 localparam S_RETRY4 = 5'd14;
 localparam S_OADDR = 5'd15;  // read: the checked sector to the requester, buffer address out
 localparam S_ODATA = 5'd16;  // read: wait for the buffer, pass the byte on
+localparam S_RETRY5 = 5'd17;
+localparam S_RETRY6 = 5'd18;
+localparam S_RETRY7 = 5'd19;
+localparam CMD_DEBUG_CS_FALLS = 8'h35;   // debug: falls of the mcu chip select (spikes too)
+localparam CMD_DEBUG_CUT = 8'h36;        // debug: frames cut short
+localparam CMD_DEBUG_BURST_POPS = 8'h37; // debug: reply words taken during a burst
 
 reg [4:0] state = S_IDLE;
 reg [2:0] slot = 3'd0;
@@ -300,6 +309,27 @@ always @(posedge clk) begin
 			if (q_free) begin
 				img_q_wr <= 1'b1;
 				img_q_di <= { CMD_DEBUG_POPS, dbg_pops };
+				state <= S_RETRY5;
+			end
+
+		S_RETRY5:
+			if (q_free) begin
+				img_q_wr <= 1'b1;
+				img_q_di <= { CMD_DEBUG_CS_FALLS, dbg_cs_falls };
+				state <= S_RETRY6;
+			end
+
+		S_RETRY6:
+			if (q_free) begin
+				img_q_wr <= 1'b1;
+				img_q_di <= { CMD_DEBUG_CUT, dbg_cut };
+				state <= S_RETRY7;
+			end
+
+		S_RETRY7:
+			if (q_free) begin
+				img_q_wr <= 1'b1;
+				img_q_di <= { CMD_DEBUG_BURST_POPS, dbg_burst_pops };
 				state <= S_REQ;
 			end
 

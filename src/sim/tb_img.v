@@ -87,8 +87,14 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.IMG_SUM(img_sum),
 	.IMG_Q_WR(img_q_wr),
 	.IMG_Q_DI(img_q_di),
-	.IMG_Q_ACK(img_q_ack)
+	.IMG_Q_ACK(img_q_ack),
+	.DBG_RX_FRAMES(dbg_rx),
+	.DBG_POPS(dbg_pops),
+	.DBG_CS_FALLS(dbg_falls),
+	.DBG_CUT(dbg_cut),
+	.DBG_BURST_POPS(dbg_bpops)
 );
+wire [15:0] dbg_rx, dbg_pops, dbg_falls, dbg_cut, dbg_bpops;
 
 reg [7:0] sdc_rd = 8'd0, sdc_wr = 8'd0;
 reg [31:0] sdc_sector = 32'd0;
@@ -104,7 +110,7 @@ img_sdc img_sdc(
 	.img_data_wr(img_data_wr), .img_data_addr(img_data_addr), .img_data(img_data),
 	.img_result_wr(img_result_wr), .img_result(img_result), .img_sum(img_sum),
 	.img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
-	.dbg_rx_frames(16'd0), .dbg_pops(16'd0),
+	.dbg_rx_frames(16'd0), .dbg_pops(16'd0), .dbg_cs_falls(16'd0), .dbg_cut(16'd0), .dbg_burst_pops(16'd0),
 	.sdc_img_mounted(sdc_img_mounted), .sdc_img_size(sdc_img_size),
 	.sdc_rd(sdc_rd), .sdc_wr(sdc_wr), .sdc_sector(sdc_sector),
 	.sdc_busy(sdc_busy), .sdc_done(sdc_done),
@@ -114,6 +120,7 @@ img_sdc img_sdc(
 );
 
 integer errors = 0;
+reg [15:0] pops0;
 
 // ---------------- requester model ----------------
 // as paula_floppy: the first byte 511 ends the sector, bytes after it are not taken
@@ -198,6 +205,15 @@ function [7:0] sector_byte(input [31:0] lba, input [8:0] i);
 endfunction
 
 reg use_burst = 0;
+// a short low spike on the classic chip select in the middle of a burst (as on Mini G: the top
+// lets a low through at once and holds it 3 clocks)
+reg cs_spike = 0, spike_go = 0;
+always @(posedge spike_go) begin
+	#420;        // over the last two shifting sck edges of the byte (434, 496 ns)
+	cs_n = 1'b0;
+	#110;
+	cs_n = 1'b1;
+end
 reg [15:0] sum;
 task serve;
 	integer i, n;
@@ -220,7 +236,12 @@ task serve;
 				#100;
 				spi_byte(8'h45, dummy);
 				spi_byte(8'h00, dummy); spi_byte(8'h00, dummy); spi_byte(8'h00, dummy); spi_byte(8'h00, dummy);
-				for (i = 0; i < 512; i = i + 1) spi_byte(sector_byte(req_lba, i), dummy);
+				for (i = 0; i < 512; i = i + 1) begin
+					spike_go = cs_spike && (i == 300 || i == 511);
+					spi_byte(sector_byte(req_lba, i), dummy);
+					if (spike_go) #200; // the rp2040 pauses between bytes now and then
+				end
+				spike_go = 0;
 				#100;
 				burst_cs_n = 1'b1;
 				#500;
@@ -331,8 +352,12 @@ initial begin
 			errors = errors + 1;
 		end
 
-	// back-to-back burst reads, the next request right after sdc_done (as the floppy reads a track)
+	// back-to-back burst reads, the next request right after sdc_done (as the floppy reads a track),
+	// with spikes on the classic chip select during the bursts: every reply word the core takes
+	// from its queue has to go out in a frame
 	use_burst = 1;
+	cs_spike = 1;
+	pops0 = dbg_pops - dbg_rx;
 	for (i = 10; i < 30; i = i + 1) begin
 		rx_count = 0;
 		fork request(0, i); serve; join
@@ -341,6 +366,14 @@ initial begin
 			$display("ERROR: back-to-back read %0d: lba %0d, %0d bytes", i, req_lba, rx_count);
 			errors = errors + 1;
 		end
+	end
+
+	cs_spike = 0;
+	$display("%t pops %0d, frames %0d, before %0d; cs falls %0d, cut frames %0d, pops in bursts %0d",
+		$time, dbg_pops, dbg_rx, pops0, dbg_falls, dbg_cut, dbg_bpops);
+	if (dbg_pops - dbg_rx != pops0) begin
+		$display("ERROR: %0d reply words taken without a frame (cs spikes during bursts)", dbg_pops - dbg_rx - pops0);
+		errors = errors + 1;
 	end
 
 	// write sector 7: the requester's bytes are addr ^ 5A ^ addr[8]

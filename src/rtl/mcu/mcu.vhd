@@ -118,6 +118,9 @@ entity mcu is
 	 QUEUE_FULL    : out std_logic := '0'; -- debug: the reply queue to the mcu is full
 	 DBG_RX_FRAMES : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: frames received
 	 DBG_POPS      : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: reply words taken
+	 DBG_CS_FALLS  : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: MCU_SS went low
+	 DBG_CUT       : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: frames cut short
+	 DBG_BURST_POPS : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: words taken in a burst
 
 	 -- busy
 	 BUSY: buffer std_logic := '1'
@@ -216,6 +219,16 @@ architecture rtl of mcu is
 	signal img_bank         : std_logic_vector(7 downto 0) := (others => '0');
 	signal dbg_rx_cnt       : unsigned(15 downto 0) := (others => '0');
 	signal dbg_pop_cnt      : unsigned(15 downto 0) := (others => '0');
+	signal dbg_fall_cnt     : unsigned(15 downto 0) := (others => '0');
+	signal dbg_cut_cnt      : unsigned(15 downto 0) := (others => '0');
+	signal dbg_bpop_cnt     : unsigned(15 downto 0) := (others => '0');
+	signal spi_ssel         : std_logic;
+	signal spi_state        : std_logic_vector(5 downto 0);
+	signal st_sync1, st_sync2, st_last : std_logic_vector(5 downto 0) := (others => '0');
+	signal ss_sync          : std_logic_vector(2 downto 0) := (others => '1');
+	signal raw_ss_sync      : std_logic_vector(2 downto 0) := (others => '1');
+	signal bcs_sync         : std_logic_vector(1 downto 0) := (others => '1');
+	signal burst_hold       : unsigned(2 downto 0) := (others => '0');
 		 
 begin
 	
@@ -230,7 +243,7 @@ begin
 	port map(
 		  clk_i          => CLK,
 		  spi_sck_i      => MCU_SCK,
-		  spi_ssel_i     => MCU_SS,
+		  spi_ssel_i     => spi_ssel,
 		  spi_mosi_i     => MCU_MOSI,
 		  spi_miso_o     => spi_miso,
 
@@ -245,10 +258,14 @@ begin
 		  wren_o         => open,
 		  wren_ack_o     => open,
 		  rx_bit_reg_o   => open,
-		  state_dbg_o    => open
+		  state_dbg_o    => spi_state
 	);
 
 	spi_di <= queue_do; -- when queue_rd_empty = '0' else x"FFFFFF";
+
+	-- karabas: the classic slave is not selected during a burst. sck runs for the burst, and a
+	-- short spike on MCU_SS (Mini G) let the slave shift and take a reply word that never went out.
+	spi_ssel <= MCU_SS or not MCU_BURST_CS_N;
 
 	--------------------------------------------------------------------------
 	-- MCU burst transfers (second chip select, see docs/burst_protocol.md)
@@ -275,7 +292,7 @@ begin
 --	queue_rd_req <= spi_di_req;
 	
 	MCU_MISO <= 
-		spi_miso when MCU_SS = '0' else 
+		spi_miso when spi_ssel = '0' else 
 		SD2_MISO when MCU_SPI_SD2_SS = '0' else
 		FT_MISO when MCU_SPI_FT_SS = '0' else 
 		'1';		
@@ -571,6 +588,39 @@ begin
 	QUEUE_FULL <= queue_wr_full;
 	DBG_RX_FRAMES <= std_logic_vector(dbg_rx_cnt);
 	DBG_POPS <= std_logic_vector(dbg_pop_cnt);
+	DBG_CS_FALLS <= std_logic_vector(dbg_fall_cnt);
+	DBG_CUT <= std_logic_vector(dbg_cut_cnt);
+	DBG_BURST_POPS <= std_logic_vector(dbg_bpop_cnt);
+
+	-- debug: MCU_SS falls (spikes too), frames that ended before their last bit (the slave state
+	-- when its select went up was not N, sck is idle then), reply words taken during a burst
+	process (CLK)
+	begin
+		if rising_edge(CLK) then
+			raw_ss_sync <= raw_ss_sync(1 downto 0) & MCU_SS;
+			ss_sync <= ss_sync(1 downto 0) & spi_ssel;
+			bcs_sync <= bcs_sync(0) & MCU_BURST_CS_N;
+			st_sync1 <= spi_state;
+			st_sync2 <= st_sync1;
+			if raw_ss_sync(2) = '1' and raw_ss_sync(1) = '0' then
+				dbg_fall_cnt <= dbg_fall_cnt + 1;
+			end if;
+			if ss_sync(1) = '0' then
+				st_last <= st_sync2;
+			end if;
+			if ss_sync(2) = '0' and ss_sync(1) = '1' and st_last /= "011000" and st_last /= "000000" then
+				dbg_cut_cnt <= dbg_cut_cnt + 1;
+			end if;
+			if bcs_sync(1) = '0' then
+				burst_hold <= (others => '1');
+			elsif burst_hold /= 0 then
+				burst_hold <= burst_hold - 1;
+			end if;
+			if queue_rd_req = '1' and (bcs_sync(1) = '0' or burst_hold /= 0) then
+				dbg_bpop_cnt <= dbg_bpop_cnt + 1;
+			end if;
+		end if;
+	end process;
 
 	process (CLK)
 	begin
