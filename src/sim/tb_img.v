@@ -116,15 +116,24 @@ img_sdc img_sdc(
 integer errors = 0;
 
 // ---------------- requester model ----------------
+// as paula_floppy: the first byte 511 ends the sector, bytes after it are not taken
 
 reg [7:0] rx_sector [0:511];
 integer rx_count = 0;
+reg rx_closed = 0;
 always @(posedge clk) begin
 	out_d1 <= sdc_byte_addr[7:0] ^ 8'h5A ^ { 7'd0, sdc_byte_addr[8] };
 	out_d2 <= out_d1;
 	if (sdc_byte_in_strobe) begin
-		rx_sector[sdc_byte_addr] = sdc_byte_in_data;
-		rx_count = rx_count + 1;
+		if (rx_closed) begin
+			if (errors < 10) $display("ERROR: byte %0d after the end of the sector", sdc_byte_addr);
+			errors = errors + 1;
+		end
+		else begin
+			rx_sector[sdc_byte_addr] = sdc_byte_in_data;
+			rx_count = rx_count + 1;
+			if (sdc_byte_addr == 9'd511) rx_closed = 1;
+		end
 	end
 	if (sdc_img_mounted != 0)
 		$display("%t mounted %b size %0d", $time, sdc_img_mounted, sdc_img_size);
@@ -135,6 +144,7 @@ end
 task request(input wr, input [31:0] sector);
 	begin
 		@(posedge clk);
+		rx_closed = 0;
 		sdc_sector <= sector;
 		if (wr) sdc_wr <= 8'h01; else sdc_rd <= 8'h01;
 		wait (sdc_busy);
@@ -302,7 +312,7 @@ initial begin
 	rx_count = 0;
 	fork request(0, 32'h0000_0213); begin serve; serve; end join
 	wait (!sdc_busy);
-	if (req_lba != 32'h213) begin $display("ERROR: lost lba byte: lba %0d", req_lba); errors = errors + 1; end
+	if (req_lba != 32'h213 || rx_count != 512) begin $display("ERROR: lost lba byte: lba %0d, %0d bytes", req_lba, rx_count); errors = errors + 1; end
 	for (i = 0; i < 512; i = i + 1)
 		if (rx_sector[i] !== sector_byte(32'h213, i)) begin
 			if (errors < 10) $display("ERROR: lost lba byte: byte %0d %02x", i, rx_sector[i]);
@@ -311,8 +321,10 @@ initial begin
 
 	// a lost data frame of a read: the core sees 511 bytes and asks again
 	drop_data = 1;
+	rx_count = 0;
 	fork request(0, 32'd12); begin serve; serve; end join
 	wait (!sdc_busy);
+	if (rx_count != 512) begin $display("ERROR: lost data frame: %0d bytes", rx_count); errors = errors + 1; end
 	for (i = 0; i < 512; i = i + 1)
 		if (rx_sector[i] !== sector_byte(12, i)) begin
 			if (errors < 10) $display("ERROR: lost data frame: byte %0d %02x", i, rx_sector[i]);
