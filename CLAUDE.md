@@ -45,8 +45,9 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
     - Key events are spaced about 1 ms apart, because CIA-A has no keyboard buffer. The PS/2 and XT scancodes of the mcu are not used: they carry typematic repeats, and AmigaOS repeats keys itself.
     - Caps lock toggles like the Amiga key. F12 (no Amiga key) resets the Amiga while it is held.
     - `src/sim/run_hid_sim.sh` is its unit test (seconds).
-- Not wired yet: the joysticks, the floppy/HDD images (the `sdc_*` interface) and the OSD overlay.
-- `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`.
+  - **OSD:** `rtl/osd/overlay.vhd` (from karabas-go-core-tsconf) draws the mcu menus (`OSD_COMMAND`) over the 31 kHz picture, just before hdmi. It scales its counters by the measured line length.
+- Not wired yet: the joysticks and the floppy/HDD images (the `sdc_*` interface).
+- `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`. `src/rtl/osd` comes from `karabas-go-core-tsconf`.
 - `upstream/`: the NanoMig Tang Nano 20K top (`tang_nano20k_top.sv`) and README. They are a reference for how `nanomig` is wired up, not part of the build.
 
 ## Constraints that drive the changes

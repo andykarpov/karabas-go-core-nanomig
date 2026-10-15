@@ -552,11 +552,22 @@ end
 wire [15:0] audio_l = { audio_left, 1'b0 };
 wire [15:0] audio_r = { audio_right, 1'b0 };
 
+// osd overlay (menus of the mcu), on the 31 kHz picture before hdmi
+wire [23:0] osd_rgb;
+overlay overlay(
+	.CLK(clk_sys),
+	.RGB_I(hdmi_rgb),
+	.RGB_O(osd_rgb),
+	.HSYNC_I(hdmi_hs),
+	.VSYNC_I(hdmi_vs),
+	.OSD_COMMAND(osd_command)
+);
+
 zhdmi_top #(.SAMPLERATE(48000)) zhdmi_top(
 	.clk(clk_sys),
 	.ds80(1'b0),
 	.reset(areset),
-	.vga_rgb(hdmi_rgb),
+	.vga_rgb(osd_rgb),
 	.vga_hs(hdmi_hs),
 	.vga_vs(hdmi_vs),
 	.vga_de(hdmi_de),
