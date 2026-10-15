@@ -273,7 +273,17 @@ module minimig
 	input	      ide_write,
 	input [15:0]  ide_writedata,
 	input	      ide_read,
-	output [15:0] ide_readdata
+	output [15:0] ide_readdata,
+
+	// karabas: the CF card slot (gayle_cf.v)
+	output  [2:0] cf_a,
+	output  [1:0] cf_cs_n,
+	output        cf_rd_n,
+	output        cf_wr_n,
+	output        cf_reset_n,
+	output [15:0] cf_dout,
+	output        cf_oe,
+	input  [15:0] cf_din
 );
 `default_nettype wire // ISE (Verilog-2001): no net type on the ports under 'none'
    
@@ -310,6 +320,7 @@ wire        ram_hwr;				//ram high byte write enable
 wire        ram_lwr;				//ram low byte write enable 
 wire        cpu_rd; 				//cpu read enable
 wire        rd_cyc;
+wire        as_cyc;
 wire        cpu_hwr;				//cpu high byte write enable
 wire        cpu_lwr;				//cpu low byte write enable
 
@@ -658,7 +669,7 @@ minimig_m68k_bridge CPU1
 	.dbr(dbr),
 	.dbs(dbs),
 	.xbs(xbs),
-	.nrdy(gayle_nrdy & rd_cyc),
+	.nrdy(gayle_nrdy), // karabas: gayle_cf holds reads and writes of the cf card (gayle.v: & rd_cyc)
 	.bls(bls),
 	.memory_config(memory_config[3:0]),
 	._as(_cpu_as),
@@ -668,6 +679,7 @@ minimig_m68k_bridge CPU1
 	._dtack(_cpu_dtack),
 	.rd(cpu_rd),
 	.rd_cyc(rd_cyc),
+	.as_cyc(as_cyc),
 	.hwr(cpu_hwr),
 	.lwr(cpu_lwr),
 	.address(cpu_address),
@@ -813,7 +825,8 @@ gary GARY1
 	.bootrom(1'b0)
 );
 
-gayle GAYLE1
+// karabas: the IDE drive is the CF card of the board, not the emulated drives of gayle.v
+gayle_cf GAYLE1
 (
 	.clk(clk),
 	.reset(reset),
@@ -826,16 +839,23 @@ gayle GAYLE1
 	.sel_gayle(sel_gayle),
 	.irq(gayle_irq),
 	.nrdy(gayle_nrdy),
+	.longword(1'b0),
+	.cyc(as_cyc),
+	.rd_cyc(rd_cyc),
 
-	.ide_req(ide_req),
-	.ide_address(ide_address),
-	.ide_write(ide_write),
-	.ide_writedata(ide_writedata),
-	.ide_read(ide_read),
-	.ide_readdata(ide_readdata),
+	.cf_a(cf_a),
+	.cf_cs_n(cf_cs_n),
+	.cf_rd_n(cf_rd_n),
+	.cf_wr_n(cf_wr_n),
+	.cf_reset_n(cf_reset_n),
+	.cf_dout(cf_dout),
+	.cf_oe(cf_oe),
+	.cf_din(cf_din),
 
 	.led(hdd_led)
 );
+assign ide_req = 6'd0;
+assign ide_readdata = 16'd0;
    
 //instantiate system control
 minimig_syscontrol CONTROL1 

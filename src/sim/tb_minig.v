@@ -240,9 +240,15 @@ initial begin
 	frame(8'h07, 8'h01, 8'hB2);
 	frame(8'h07, 8'h02, 8'hC3);
 	frame(8'h07, 8'h03, 8'hD4);
+	// the first word of the Kickstart, written again: only the lower 256 KB of segment 7 loaded,
+	// the upper half is read from the lower one (both halves of kick13.rom are the same)
+	frame(8'h06, 8'h01, 8'h38);   // bank addr[23:16]: byte 0x380000
+	frame(8'h06, 8'h00, 8'h00);   // bank addr[15:8]
+	frame(8'h07, 8'h00, sram_hi[21'h1C0000]);
+	frame(8'h07, 8'h01, sram_lo[21'h1C0000]);
 	frame(8'h08, 8'h00, 8'h00);   // romloader off
-	$display("%t loader check: %02x%02x %02x%02x (expected a1b2 c3d4)", $time,
-		sram_hi[21'h80], sram_lo[21'h80], sram_hi[21'h81], sram_lo[21'h81]);
+	$display("%t loader check: %02x%02x %02x%02x (expected a1b2 c3d4) kick_mirror %b (expected 1)", $time,
+		sram_hi[21'h80], sram_lo[21'h80], sram_hi[21'h81], sram_lo[21'h81], dut.kick_mirror);
 	frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 	$display("%t init done", $time);
 	// keyboard: F12 (keyboard reset), as the firmware sends a report
@@ -264,6 +270,24 @@ initial begin
 	frame(8'h02, 8'h03, 8'h01);
 	#50000;
 	$display("%t ms %02x %02x b %b upd %b buttons %b", $time, dut.ms_x, dut.ms_y, dut.ms_b, dut.ms_upd, dut.mouse_buttons);
+	// joysticks: L up + A, R right + B + C
+	frame(8'h03, 8'h00, 8'h43);
+	frame(8'h03, 8'h02, 8'h91);
+	frame(8'h03, 8'h03, 8'h01);
+	#1000;
+	$display("%t joy_l %04x joy0 %02x (expected 18) joy_r %04x joy1 %02x (expected 61) fire port2 %b (expected 0)", $time,
+		dut.joy_l, dut.joy0, dut.joy_r, dut.joy1, dut.nanomig.minimig.USERIO1._fire1);
+	frame(8'h03, 8'h00, 8'h01);
+	frame(8'h03, 8'h02, 8'h01);
+	frame(8'h03, 8'h03, 8'h00);
 end
+
+// kickstart reads from the upper 256 KB (Kickstart 1.3 runs at $FC0000): the mirror reads the lower half
+integer nkick = 0;
+always @(posedge dut.clk_sys)
+	if (dut.cyc == 2'd1 && dut.MRD_N == 2'b00 && MA[20:18] == 3'b111 && dut.ram_a[18] && nkick < 3) begin
+		nkick = nkick + 1;
+		$display("%t kick read ram_a %06x MA %06x (MA[17] expected 0)", $time, {dut.ram_a, 1'b0}, MA);
+	end
 
 endmodule

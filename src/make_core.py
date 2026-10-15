@@ -41,10 +41,10 @@ bitstream_size = len(bitstream)
 # total rom size
 rom_size = 0
 for rom in d.roms:
-    r = file_read(rom.filename, "rb")
     rom_is_external = rom.external if hasattr(rom, "external") else False
     # embedded rom
     if not rom_is_external:
+        r = file_read(rom.filename, "rb")
         rom_size = rom_size + len(r)
     # external rom - only a filename size is appended
     else:
@@ -86,16 +86,17 @@ o.write(bitstream)
 
 # roms block
 for rom in d.roms:
-    r = file_read(rom.filename, "rb")
     rom_is_external = rom.external if hasattr(rom, "external") else False
+    # an external rom is a file on the sd card of the board: only its name goes into the core
+    r = file_read(rom.filename, "rb") if not rom_is_external else rom.filename.encode('ascii')
     # rom size is a file size if rom is embedded or length of the filename if rom is external
-    r_size = len(r) if not rom_is_external else len(rom.filename)
+    r_size = len(r)
     # set the upper bit of r_size as rom_is_external flag
     r_size = r_size | (1 << 31) if rom_is_external else r_size;
     o.write(r_size.to_bytes(4, 'big'))
     o.write(rom.address.to_bytes(4, 'big'))
     # dump rom content if rom is embedded or filename if rom is extenrnal
-    o.write(r) if not rom_is_external else o.write(rom.filename)
+    o.write(r)
 
 # usb key map
 
