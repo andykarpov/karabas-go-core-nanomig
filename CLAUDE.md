@@ -46,7 +46,14 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
     - Caps lock toggles like the Amiga key. F12 (no Amiga key) resets the Amiga while it is held.
     - `src/sim/run_hid_sim.sh` is its unit test (seconds).
   - **OSD:** `rtl/osd/overlay.vhd` (from karabas-go-core-tsconf) draws the mcu menus (`OSD_COMMAND`) over the 31 kHz picture, just before hdmi. It scales its counters by the measured line length.
-- Not wired yet: the joysticks and the floppy/HDD images (the `sdc_*` interface).
+  - **Disk images:** `rtl/mcu/img_sdc.v` connects the file mounter of the mcu link (the `IMG_*` ports added to `mcu.vhd`, protocol in karabas-go-firmware `docs/protocol.md`, firmware branch `filemounter`) to the `sdc_*` sector interface of NanoMig.
+    - Slot n is sdc index n: 0-3 floppies, 4-5 IDE. `core_minig.json` has DF0 / DF1 (`F` items, slots 0 / 1, `.adf`) as the first two OSD items, so the soft switch indices start at 2.
+    - One request at a time. Write data is read `OUT_LATENCY` clocks after `sdc_byte_addr`. A request ends after a timeout if the firmware has no file mounter.
+    - The link loses a frame now and then (both directions, cause not found; the firmware also had to keep the reply order across its tasks), so requests are checked end to end: the firmware needs all 4 LBA bytes; reads carry the 16-bit sum of the sector and need 512 bytes; writes carry their sum. A failed request is sent again (`RETRIES`, `TIMEOUT` 200 ms); a read that still fails gives the floppy 512 zero bytes so it does not hang. The firmware sends sectors as classic frames: with bursts the core stopped taking its reply frames.
+    - `paula_floppy.v` (karabas change): a write dma goes on after `lenzero` until the fifo is empty. With the slow mcu writes the fifo holds the end of the track, which NanoMig dropped (lost sectors and a DSKBLK that never came).
+    - Tests: `run_img_sim.sh` (`mcu.vhd` + `img_sdc.v` against a model of the firmware, incl. lost frames), `run_floppy_sim.sh <adf>` (track read at the real dma rate), `run_floppy_wr_sim.sh <adf>` (track write; `mfm_track.py` encodes the ADF track as trackdisk does, the sd model is slow now and then).
+- Not wired yet: the joysticks, and IDE images (the same path, `sdc` index 4-5, writes need a check of the IDE data latch).
+- The second row of the debug bar shows the `img_sdc` state, its retries, `sdc_busy`, the DF0 read / write requests and the reply queue state.
 - `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`. `src/rtl/osd` comes from `karabas-go-core-tsconf`.
 - `upstream/`: the NanoMig Tang Nano 20K top (`tang_nano20k_top.sv`) and README. They are a reference for how `nanomig` is wired up, not part of the build.
 

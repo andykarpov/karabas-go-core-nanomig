@@ -11,11 +11,14 @@
         {"filename": "roms/kick13.rom", "address": 3670016}
     ],
     "osd": [
+        {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1"},
+        {"type": "F", "name": "DF1", "slot": 1, "extensions": ".adf", "hotkey": "Menu+F2"},
         {"type": "S", "name": "Chipset", "options": ["OCS-A500", "OCS-A1000", "ECS"], "default": 0},
         {"type": "S", "name": "Chip RAM", "options": ["512K", "1M", "1.5M", "2M"], "default": 0},
         {"type": "S", "name": "Slow RAM", "options": ["None", "512K", "1M", "1.5M"], "default": 1},
         {"type": "S", "name": "Video", "options": ["PAL", "NTSC"], "default": 0},
         {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"},
-        {"type": "S", "name": "Debug", "options": ["Off", "On"], "default": 1, "hotkey": "Menu+D"}
+        {"type": "S", "name": "Debug", "options": ["Off", "On"], "default": 1, "hotkey": "Menu+D"},
+        {"type": "S", "name": "Write protect", "options": ["On", "Off"], "default": 0}
     ]
 }
