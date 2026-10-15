@@ -128,7 +128,7 @@ assign amiga =
   (code == 7'h61)?7'h3f:   // 61: KP 9
   (code == 7'h62)?7'h0f:   // 62: KP 0
   (code == 7'h63)?7'h3c:   // 63: KP .
-  (code == 7'h64)?7'h2b:   // 64: EUR-2
+  (code == 7'h64)?7'h30:   // 64: EUR-2 (karabas: the key left of Z is Amiga 30, 2b is EUR-1 next to return)
 
   // remapped modifier keys
   (code == 7'h68)?7'h63:   // left ctrl
