@@ -369,7 +369,7 @@ initial begin
 	end
 
 	cs_spike = 0;
-	$display("%t pops %0d, frames %0d, before %0d; cs falls %0d, cut frames %0d, pops in bursts %0d",
+	$display("%t pops %0d, frames %0d, before %0d; cs falls %0d, cut frames %0d, di_req pulses %0d",
 		$time, dbg_pops, dbg_rx, pops0, dbg_falls, dbg_cut, dbg_bpops);
 	if (dbg_pops - dbg_rx != pops0) begin
 		$display("ERROR: %0d reply words taken without a frame (cs spikes during bursts)", dbg_pops - dbg_rx - pops0);

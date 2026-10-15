@@ -120,7 +120,7 @@ entity mcu is
 	 DBG_POPS      : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: reply words taken
 	 DBG_CS_FALLS  : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: MCU_SS went low
 	 DBG_CUT       : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: frames cut short
-	 DBG_BURST_POPS : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: words taken in a burst
+	 DBG_BURST_POPS : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: di_req pulses (the old pop source)
 
 	 -- busy
 	 BUSY: buffer std_logic := '1'
@@ -227,8 +227,6 @@ architecture rtl of mcu is
 	signal st_sync1, st_sync2, st_last : std_logic_vector(5 downto 0) := (others => '0');
 	signal ss_sync          : std_logic_vector(2 downto 0) := (others => '1');
 	signal raw_ss_sync      : std_logic_vector(2 downto 0) := (others => '1');
-	signal bcs_sync         : std_logic_vector(1 downto 0) := (others => '1');
-	signal burst_hold       : unsigned(2 downto 0) := (others => '0');
 		 
 begin
 	
@@ -305,13 +303,23 @@ begin
 	SD2_CS_N <= MCU_SPI_SD2_SS;
 	SD2_MOSI <= MCU_MOSI;	
 	
-	-- pull queue data  
-	process (CLK, spi_di_req)
+	-- pull queue data
+	-- karabas: one word per received frame, on do_valid. di_req of spi_slave is a combinational
+	-- decode of its sck-domain state (states 4 to 1, 4 -> 3 flips three bits), sampled here
+	-- without a synchroniser: a glitch gave a second request in a complete frame, and a reply
+	-- word was lost (hardware: 3-9 pops more than frames per ~1000 frames). do_valid comes from
+	-- a register. The word popped after frame k is sent in frame k+1, as before: the fifo
+	-- output is in di_reg about 7 clocks (250 ns) after the frame, the mcu waits >= 4.5 us.
+	process (CLK)
 	begin 
 		if rising_edge(CLK) then 
 			queue_rd_req <= '0';
-			if (spi_di_req = '1' and prev_spi_di_req = '0') then 
+			if (spi_do_valid = '1' and prev_spi_do_valid = '0') then 
 				queue_rd_req <= '1';
+			end if;
+			-- debug: rising edges of di_req, the old pop source (DBG_BURST_POPS)
+			if (spi_di_req = '1' and prev_spi_di_req = '0') then
+				dbg_bpop_cnt <= dbg_bpop_cnt + 1;
 			end if;
 			prev_spi_di_req <= spi_di_req;
 		end if;
@@ -593,13 +601,12 @@ begin
 	DBG_BURST_POPS <= std_logic_vector(dbg_bpop_cnt);
 
 	-- debug: MCU_SS falls (spikes too), frames that ended before their last bit (the slave state
-	-- when its select went up was not N, sck is idle then), reply words taken during a burst
+	-- when its select went up was not N, sck is idle then)
 	process (CLK)
 	begin
 		if rising_edge(CLK) then
 			raw_ss_sync <= raw_ss_sync(1 downto 0) & MCU_SS;
 			ss_sync <= ss_sync(1 downto 0) & spi_ssel;
-			bcs_sync <= bcs_sync(0) & MCU_BURST_CS_N;
 			st_sync1 <= spi_state;
 			st_sync2 <= st_sync1;
 			if raw_ss_sync(2) = '1' and raw_ss_sync(1) = '0' then
@@ -610,14 +617,6 @@ begin
 			end if;
 			if ss_sync(2) = '0' and ss_sync(1) = '1' and st_last /= "011000" and st_last /= "000000" then
 				dbg_cut_cnt <= dbg_cut_cnt + 1;
-			end if;
-			if bcs_sync(1) = '0' then
-				burst_hold <= (others => '1');
-			elsif burst_hold /= 0 then
-				burst_hold <= burst_hold - 1;
-			end if;
-			if queue_rd_req = '1' and (bcs_sync(1) = '0' or burst_hold /= 0) then
-				dbg_bpop_cnt <= dbg_bpop_cnt + 1;
 			end if;
 		end if;
 	end process;
