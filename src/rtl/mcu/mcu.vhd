@@ -115,12 +115,6 @@ entity mcu is
 	 IMG_Q_WR      : in std_logic := '0'; -- a frame to the mcu (request, write data), held until IMG_Q_ACK
 	 IMG_Q_DI      : in std_logic_vector(23 downto 0) := (others => '0');
 	 IMG_Q_ACK     : buffer std_logic := '0';
-	 QUEUE_FULL    : out std_logic := '0'; -- debug: the reply queue to the mcu is full
-	 DBG_RX_FRAMES : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: frames received
-	 DBG_POPS      : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: reply words taken
-	 DBG_CS_FALLS  : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: MCU_SS went low
-	 DBG_CUT       : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: frames cut short
-	 DBG_BURST_POPS : out std_logic_vector(15 downto 0) := (others => '0'); -- debug: di_req pulses (the old pop source)
 
 	 -- busy
 	 BUSY: buffer std_logic := '1'
@@ -163,8 +157,6 @@ architecture rtl of mcu is
 	 signal prev_spi_do_valid : std_logic := '0';
 	 signal spi_di 			: std_logic_vector(23 downto 0);
 	 signal spi_do 			: std_logic_vector(23 downto 0);
-	 signal spi_di_req 		: std_logic;
-	 signal prev_spi_di_req : std_logic := '0';
 	 signal spi_miso 		 	: std_logic;
 	 
 	 -- rtc 2-port ram signals
@@ -217,16 +209,7 @@ architecture rtl of mcu is
 	signal img_slot         : std_logic_vector(7 downto 0) := (others => '0');
 	signal img_size_tmp     : std_logic_vector(63 downto 0) := (others => '0');
 	signal img_bank         : std_logic_vector(7 downto 0) := (others => '0');
-	signal dbg_rx_cnt       : unsigned(15 downto 0) := (others => '0');
-	signal dbg_pop_cnt      : unsigned(15 downto 0) := (others => '0');
-	signal dbg_fall_cnt     : unsigned(15 downto 0) := (others => '0');
-	signal dbg_cut_cnt      : unsigned(15 downto 0) := (others => '0');
-	signal dbg_bpop_cnt     : unsigned(15 downto 0) := (others => '0');
 	signal spi_ssel         : std_logic;
-	signal spi_state        : std_logic_vector(5 downto 0);
-	signal st_sync1, st_sync2, st_last : std_logic_vector(5 downto 0) := (others => '0');
-	signal ss_sync          : std_logic_vector(2 downto 0) := (others => '1');
-	signal raw_ss_sync      : std_logic_vector(2 downto 0) := (others => '1');
 		 
 begin
 	
@@ -245,7 +228,7 @@ begin
 		  spi_mosi_i     => MCU_MOSI,
 		  spi_miso_o     => spi_miso,
 
-		  di_req_o       => spi_di_req,
+		  di_req_o       => open,
 		  di_i           => spi_di,
 		  wren_i         => '1',
 		  
@@ -256,7 +239,7 @@ begin
 		  wren_o         => open,
 		  wren_ack_o     => open,
 		  rx_bit_reg_o   => open,
-		  state_dbg_o    => spi_state
+		  state_dbg_o    => open
 	);
 
 	spi_di <= queue_do; -- when queue_rd_empty = '0' else x"FFFFFF";
@@ -317,11 +300,6 @@ begin
 			if (spi_do_valid = '1' and prev_spi_do_valid = '0') then 
 				queue_rd_req <= '1';
 			end if;
-			-- debug: rising edges of di_req, the old pop source (DBG_BURST_POPS)
-			if (spi_di_req = '1' and prev_spi_di_req = '0') then
-				dbg_bpop_cnt <= dbg_bpop_cnt + 1;
-			end if;
-			prev_spi_di_req <= spi_di_req;
 		end if;
 	end process;
 
@@ -593,46 +571,6 @@ begin
 		din 		=> queue_di
 	);
 	
-	QUEUE_FULL <= queue_wr_full;
-	DBG_RX_FRAMES <= std_logic_vector(dbg_rx_cnt);
-	DBG_POPS <= std_logic_vector(dbg_pop_cnt);
-	DBG_CS_FALLS <= std_logic_vector(dbg_fall_cnt);
-	DBG_CUT <= std_logic_vector(dbg_cut_cnt);
-	DBG_BURST_POPS <= std_logic_vector(dbg_bpop_cnt);
-
-	-- debug: MCU_SS falls (spikes too), frames that ended before their last bit (the slave state
-	-- when its select went up was not N, sck is idle then)
-	process (CLK)
-	begin
-		if rising_edge(CLK) then
-			raw_ss_sync <= raw_ss_sync(1 downto 0) & MCU_SS;
-			ss_sync <= ss_sync(1 downto 0) & spi_ssel;
-			st_sync1 <= spi_state;
-			st_sync2 <= st_sync1;
-			if raw_ss_sync(2) = '1' and raw_ss_sync(1) = '0' then
-				dbg_fall_cnt <= dbg_fall_cnt + 1;
-			end if;
-			if ss_sync(1) = '0' then
-				st_last <= st_sync2;
-			end if;
-			if ss_sync(2) = '0' and ss_sync(1) = '1' and st_last /= "011000" and st_last /= "000000" then
-				dbg_cut_cnt <= dbg_cut_cnt + 1;
-			end if;
-		end if;
-	end process;
-
-	process (CLK)
-	begin
-		if rising_edge(CLK) then
-			if spi_do_valid = '1' and prev_spi_do_valid = '0' then
-				dbg_rx_cnt <= dbg_rx_cnt + 1;
-			end if;
-			if queue_rd_req = '1' then
-				dbg_pop_cnt <= dbg_pop_cnt + 1;
-			end if;
-		end if;
-	end process;
-
 	-- fifo handling / queue commands to mcu side
 	process(CLK)
 	begin

@@ -23,14 +23,12 @@
    256) + IMG_BUF_DATA frames;
  - the end is the IMG_SEC answer of the mcu. Without an answer in TIMEOUT the whole request is
    sent again (RETRIES times; a reply frame of the fpga can get lost on the link), then the request
-   ends without data (a firmware without the file mounter). Each retry is counted in
-   CMD_DEBUG_ADDRESS (the firmware logs it);
+   ends without data (a firmware without the file mounter);
  - the link can lose a frame now and then, so a request is checked end to end and sent again
    (RETRIES times) when it fails: a read needs all 512 bytes and the 16-bit sum the mcu sends
    before its result (IMG_LBA 0/1, mcu -> fpga); a write sends the sum of its bytes after them
    (IMG_BUF_BANK 10/11) and the mcu answers an error if it got less or a different sum. A read
-   that still fails gives the requester 512 zero bytes, so it does not wait forever;
- - debug: after a read, the 16-bit sum of the received bytes goes to the mcu as CMD_DEBUG_DATA.
+   that still fails gives the requester 512 zero bytes, so it does not wait forever.
 */
 
 module img_sdc #(
@@ -53,11 +51,6 @@ module img_sdc #(
 	output reg img_q_wr = 1'b0,
 	output reg [23:0] img_q_di = 24'd0,
 	input wire img_q_ack,
-	input wire [15:0] dbg_rx_frames,
-	input wire [15:0] dbg_pops,
-	input wire [15:0] dbg_cs_falls,
-	input wire [15:0] dbg_cut,
-	input wire [15:0] dbg_burst_pops,
 
 	// nanomig
 	output reg [7:0] sdc_img_mounted = 8'd0,
@@ -72,45 +65,28 @@ module img_sdc #(
 	output reg [7:0] sdc_byte_in_data = 8'd0,
 	input wire [7:0] sdc_byte_out_data,
 
-	output wire active, // a request is in progress (activity led / osd)
-	output wire [7:0] dbg // debug: state, tries
+	output wire active // a request is in progress (activity led / osd)
 );
 
 localparam CMD_IMG_LBA = 8'h42;
 localparam CMD_IMG_SEC = 8'h43;
 localparam CMD_IMG_BUF_BANK = 8'h44;
 localparam CMD_IMG_BUF_DATA = 8'h45;
-localparam CMD_DEBUG_ADDRESS = 8'h30;
-localparam CMD_DEBUG_DATA = 8'h31;
 
-localparam S_IDLE = 5'd0;
-localparam S_REQ = 5'd1;    // queue IMG_LBA 0..3, IMG_SEC
-localparam S_READ = 5'd2;   // sector bytes from the mcu into the buffer, until the result
-localparam S_WADDR = 5'd3;  // write: buffer address out
-localparam S_WDATA = 5'd4;  // write: queue the byte (and the bank before it)
-localparam S_WAIT = 5'd5;   // wait for the result
-localparam S_DBG = 5'd6;    // queue the sum of the bytes read
-localparam S_CADDR = 5'd7;  // write: copy the sector of the requester, address out
-localparam S_CDATA = 5'd8;  // write: copy, wait for the data and store it
-localparam S_RETRY = 5'd9;  // queue the retry count, then the request again
-localparam S_RETRY2 = 5'd10; // debug: queue the number of frames the mcu.vhd queue took
-localparam S_WSUM = 5'd11;   // write: queue the sum of the sector (2 frames)
-localparam S_FILL = 5'd12;   // read failed: 512 zero bytes to the requester
-localparam CMD_DEBUG_FRAMES = 8'h32;
-localparam CMD_DEBUG_RX = 8'h33;    // debug: frames the mcu.vhd spi slave received
-localparam CMD_DEBUG_POPS = 8'h34;  // debug: reply words it took from the queue
-localparam S_RETRY3 = 5'd13;
-localparam S_RETRY4 = 5'd14;
-localparam S_OADDR = 5'd15;  // read: the checked sector to the requester, buffer address out
-localparam S_ODATA = 5'd16;  // read: wait for the buffer, pass the byte on
-localparam S_RETRY5 = 5'd17;
-localparam S_RETRY6 = 5'd18;
-localparam S_RETRY7 = 5'd19;
-localparam CMD_DEBUG_CS_FALLS = 8'h35;   // debug: falls of the mcu chip select (spikes too)
-localparam CMD_DEBUG_CUT = 8'h36;        // debug: frames cut short
-localparam CMD_DEBUG_BURST_POPS = 8'h37; // debug: reply words taken during a burst
+localparam S_IDLE = 4'd0;
+localparam S_REQ = 4'd1;    // queue IMG_LBA 0..3, IMG_SEC
+localparam S_READ = 4'd2;   // sector bytes from the mcu into the buffer, until the result
+localparam S_WADDR = 4'd3;  // write: buffer address out
+localparam S_WDATA = 4'd4;  // write: queue the byte (and the bank before it)
+localparam S_WAIT = 4'd5;   // wait for the result
+localparam S_CADDR = 4'd6;  // write: copy the sector of the requester, address out
+localparam S_CDATA = 4'd7;  // write: copy, wait for the data and store it
+localparam S_WSUM = 4'd8;   // write: queue the sum of the sector (2 frames)
+localparam S_FILL = 4'd9;   // read failed: 512 zero bytes to the requester
+localparam S_OADDR = 4'd10; // read: the checked sector to the requester, buffer address out
+localparam S_ODATA = 4'd11; // read: wait for the buffer, pass the byte on
 
-reg [4:0] state = S_IDLE;
+reg [3:0] state = S_IDLE;
 reg [2:0] slot = 3'd0;
 reg write = 1'b0;
 reg [31:0] lba = 32'd0;
@@ -123,8 +99,6 @@ reg [15:0] rd_sum = 16'd0;
 reg [9:0] rd_cnt = 10'd0;    // bytes of the sector read
 reg [15:0] wr_sum = 16'd0;   // sum of the sector written
 reg [1:0] tries = 2'd0;
-reg [15:0] retry_count = 16'd0;
-reg [15:0] q_count = 16'd0; // debug: frames taken by the mcu.vhd reply queue
 
 // sector buffer of a read or a write (block ram, one write port, synchronous read)
 reg [7:0] wbuf [0:511];
@@ -140,7 +114,6 @@ always @(posedge clk) begin
 end
 
 assign active = sdc_busy;
-assign dbg = { 2'b00, tries, state[3:0] };
 
 wire [7:0] req = sdc_rd | sdc_wr;
 wire [2:0] req_slot = req[0] ? 3'd0 : req[1] ? 3'd1 : req[2] ? 3'd2 : req[3] ? 3'd3 :
@@ -157,10 +130,8 @@ always @(posedge clk) begin
 	sdc_done <= 1'b0;
 	sdc_byte_in_strobe <= 1'b0;
 	wbuf_we <= 1'b0;
-	if (img_q_ack) begin
+	if (img_q_ack)
 		img_q_wr <= 1'b0;
-		q_count <= q_count + 16'd1;
-	end
 
 	if (timeout != 0)
 		timeout <= timeout - 24'd1;
@@ -240,15 +211,18 @@ always @(posedge clk) begin
 				wpos <= 10'd0;
 				state <= S_FILL;
 			end
-			else if (img_result_wr || timeout == 24'd1)
-				state <= S_RETRY;
+			else if (img_result_wr || timeout == 24'd1) begin
+				tries <= tries + 2'd1;
+				step <= 3'd0;
+				state <= S_REQ;
+			end
 		end
 
 		S_OADDR:
 			if (wpos == 10'd512) begin
 				sdc_busy <= 1'b0;
 				sdc_done <= 1'b1;
-				state <= S_DBG;
+				state <= S_IDLE;
 			end
 			else begin
 				wbuf_ra <= wpos[8:0];
@@ -271,73 +245,13 @@ always @(posedge clk) begin
 			if (wpos == 10'd512) begin
 				sdc_busy <= 1'b0;
 				sdc_done <= 1'b1;
-				state <= S_DBG;
+				state <= S_IDLE;
 			end
 			else begin
 				sdc_byte_addr <= wpos[8:0];
 				sdc_byte_in_data <= 8'h00;
 				sdc_byte_in_strobe <= 1'b1;
 				wpos <= wpos + 10'd1;
-			end
-
-		S_RETRY:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_ADDRESS, retry_count + 16'd1 };
-				retry_count <= retry_count + 16'd1;
-				tries <= tries + 2'd1;
-				step <= 3'd0;
-				state <= S_RETRY2;
-			end
-
-		S_RETRY2:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				// the frames taken before this one (the ack of the retry count frame is counted)
-				img_q_di <= { CMD_DEBUG_FRAMES, q_count + { 15'd0, img_q_ack } };
-				state <= S_RETRY3;
-			end
-
-		S_RETRY3:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_RX, dbg_rx_frames };
-				state <= S_RETRY4;
-			end
-
-		S_RETRY4:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_POPS, dbg_pops };
-				state <= S_RETRY5;
-			end
-
-		S_RETRY5:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_CS_FALLS, dbg_cs_falls };
-				state <= S_RETRY6;
-			end
-
-		S_RETRY6:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_CUT, dbg_cut };
-				state <= S_RETRY7;
-			end
-
-		S_RETRY7:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_BURST_POPS, dbg_burst_pops };
-				state <= S_REQ;
-			end
-
-		S_DBG:
-			if (q_free) begin
-				img_q_wr <= 1'b1;
-				img_q_di <= { CMD_DEBUG_DATA, rd_sum };
-				state <= S_IDLE;
 			end
 
 		S_WADDR: begin
@@ -388,8 +302,11 @@ always @(posedge clk) begin
 				sdc_done <= 1'b1;
 				state <= S_IDLE;
 			end
-			else if (img_result_wr || timeout == 24'd1)
-				state <= S_RETRY; // the sector is still in wbuf
+			else if (img_result_wr || timeout == 24'd1) begin
+				tries <= tries + 2'd1;
+				step <= 3'd0;
+				state <= S_REQ; // the sector is still in wbuf
+			end
 
 		default: state <= S_IDLE;
 	endcase

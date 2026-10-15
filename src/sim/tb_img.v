@@ -87,14 +87,8 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.IMG_SUM(img_sum),
 	.IMG_Q_WR(img_q_wr),
 	.IMG_Q_DI(img_q_di),
-	.IMG_Q_ACK(img_q_ack),
-	.DBG_RX_FRAMES(dbg_rx),
-	.DBG_POPS(dbg_pops),
-	.DBG_CS_FALLS(dbg_falls),
-	.DBG_CUT(dbg_cut),
-	.DBG_BURST_POPS(dbg_bpops)
+	.IMG_Q_ACK(img_q_ack)
 );
-wire [15:0] dbg_rx, dbg_pops, dbg_falls, dbg_cut, dbg_bpops;
 
 reg [7:0] sdc_rd = 8'd0, sdc_wr = 8'd0;
 reg [31:0] sdc_sector = 32'd0;
@@ -110,7 +104,6 @@ img_sdc img_sdc(
 	.img_data_wr(img_data_wr), .img_data_addr(img_data_addr), .img_data(img_data),
 	.img_result_wr(img_result_wr), .img_result(img_result), .img_sum(img_sum),
 	.img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
-	.dbg_rx_frames(16'd0), .dbg_pops(16'd0), .dbg_cs_falls(16'd0), .dbg_cut(16'd0), .dbg_burst_pops(16'd0),
 	.sdc_img_mounted(sdc_img_mounted), .sdc_img_size(sdc_img_size),
 	.sdc_rd(sdc_rd), .sdc_wr(sdc_wr), .sdc_sector(sdc_sector),
 	.sdc_busy(sdc_busy), .sdc_done(sdc_done),
@@ -120,7 +113,8 @@ img_sdc img_sdc(
 );
 
 integer errors = 0;
-reg [15:0] pops0;
+integer incomplete = 0; // requests the mcu model got without all their IMG_LBA frames
+integer incomplete0;
 
 // ---------------- requester model ----------------
 // as paula_floppy: the first byte 511 ends the sector, bytes after it are not taken
@@ -166,7 +160,6 @@ endtask
 reg [31:0] req_lba = 0;
 reg [7:0] req_slot = 0, req_op = 0;
 reg req_pending = 0, req_started = 0;
-integer img_frames = 0; // frames of img_sdc received (42, 43, 30, 31, 32)
 reg drop_sec = 0;
 reg drop_lba1 = 0;
 reg trace = 0;    // lose the next IMG_LBA 1 frame of the fpga
@@ -179,10 +172,8 @@ integer wr_count = 0;
 
 task handle_reply;
 	begin
-		if (rc == 8'h42 || rc == 8'h43 || rc == 8'h30 || rc == 8'h31) img_frames = img_frames + 1;
 		if (rc != 8'hFF && trace) $display("%t   frame %02x %02x %02x", $time, rc, ra, rd);
 		case (rc)
-			8'h32: $display("%t mcu: the core queued %0d frames, the mcu got %0d", $time, {ra, rd}, img_frames);
 			8'h42: if (drop_lba1 && ra == 1) begin drop_lba1 = 0; $display("%t mcu: IMG_LBA 1 dropped", $time); end
 			       else begin
 			         req_lba[ra*8 +: 8] = rd;
@@ -191,8 +182,6 @@ task handle_reply;
 			       end
 			8'h43: if (drop_sec) begin drop_sec = 0; $display("%t mcu: IMG_SEC dropped", $time); end
 			       else begin req_slot = ra; req_op = rd; req_pending = 1; req_started = 0; end
-			8'h30: $display("%t mcu: debug address (retries) %02x%02x", $time, ra, rd);
-			8'h31: $display("%t mcu: debug data %02x%02x", $time, ra, rd);
 			8'h44: if (ra == 8'h10) wsum_rx[7:0] = rd; else if (ra == 8'h11) wsum_rx[15:8] = rd; else wr_bank = rd;
 			8'h45: begin wr_buf[{wr_bank[0], ra}] = rd; wr_count = wr_count + 1; end
 			default: ;
@@ -226,6 +215,7 @@ task serve;
 		$display("%t mcu: request slot %0d op %0d lba %0d", $time, req_slot, req_op, req_lba);
 		if (lba_mask != 4'b1111) begin
 			$display("%t mcu: incomplete lba, error", $time);
+			incomplete = incomplete + 1;
 			lba_mask = 0;
 			frame(8'h43, req_slot, 8'h02);
 		end
@@ -357,7 +347,7 @@ initial begin
 	// from its queue has to go out in a frame
 	use_burst = 1;
 	cs_spike = 1;
-	pops0 = dbg_pops - dbg_rx;
+	incomplete0 = incomplete;
 	for (i = 10; i < 30; i = i + 1) begin
 		rx_count = 0;
 		fork request(0, i); serve; join
@@ -369,10 +359,8 @@ initial begin
 	end
 
 	cs_spike = 0;
-	$display("%t pops %0d, frames %0d, before %0d; cs falls %0d, cut frames %0d, di_req pulses %0d",
-		$time, dbg_pops, dbg_rx, pops0, dbg_falls, dbg_cut, dbg_bpops);
-	if (dbg_pops - dbg_rx != pops0) begin
-		$display("ERROR: %0d reply words taken without a frame (cs spikes during bursts)", dbg_pops - dbg_rx - pops0);
+	if (incomplete != incomplete0) begin
+		$display("ERROR: %0d requests lost a reply frame (cs spikes during bursts)", incomplete - incomplete0);
 		errors = errors + 1;
 	end
 

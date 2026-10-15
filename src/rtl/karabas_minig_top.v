@@ -196,8 +196,6 @@ wire [8:0] img_data_addr;
 wire [7:0] img_data, img_result;
 wire [15:0] img_sum;
 wire [23:0] img_q_di;
-wire queue_full;
-wire [15:0] dbg_rx_frames, dbg_pops, dbg_cs_falls, dbg_cut, dbg_burst_pops;
 wire [2:0] ms_b;
 wire ms_upd;
 
@@ -282,12 +280,6 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.IMG_Q_WR(img_q_wr),
 	.IMG_Q_DI(img_q_di),
 	.IMG_Q_ACK(img_q_ack),
-	.QUEUE_FULL(queue_full),
-	.DBG_RX_FRAMES(dbg_rx_frames),
-	.DBG_POPS(dbg_pops),
-	.DBG_CS_FALLS(dbg_cs_falls),
-	.DBG_CUT(dbg_cut),
-	.DBG_BURST_POPS(dbg_burst_pops),
 
 	.HWID(),
 	.DVI_ONLY(dvi_only),
@@ -303,8 +295,8 @@ reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
 reg       sw_reset = 1'b0;
-reg       sw_debug = 1'b1;
-reg       sw_wprot = 1'b1;     // floppy write protect     // input debug bar (karabas: until the osd overlay exists)
+reg       sw_debug = 1'b1;     // input debug bar (karabas: until the osd overlay exists)
+reg       sw_wprot = 1'b1;     // floppy write protect
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
 always @(posedge clk_sys) begin
@@ -377,7 +369,6 @@ wire sdc_busy, sdc_done, sdc_byte_in_strobe;
 wire [8:0] sdc_byte_addr;
 wire [7:0] sdc_byte_in_data, sdc_byte_out_data;
 wire img_active;
-wire [7:0] img_dbg;
 
 wire clk7_en, clk7n_en;
 wire hs, vs;
@@ -485,11 +476,6 @@ img_sdc img_sdc(
 	.img_q_wr(img_q_wr),
 	.img_q_di(img_q_di),
 	.img_q_ack(img_q_ack),
-	.dbg_rx_frames(dbg_rx_frames),
-	.dbg_pops(dbg_pops),
-	.dbg_cs_falls(dbg_cs_falls),
-	.dbg_cut(dbg_cut),
-	.dbg_burst_pops(dbg_burst_pops),
 
 	.sdc_img_mounted(sdc_img_mounted),
 	.sdc_img_size(sdc_img_size),
@@ -503,8 +489,7 @@ img_sdc img_sdc(
 	.sdc_byte_in_data(sdc_byte_in_data),
 	.sdc_byte_out_data(sdc_byte_out_data),
 
-	.active(img_active),
-	.dbg(img_dbg)
+	.active(img_active)
 );
 
 //---------- SRAM ------------
@@ -610,27 +595,19 @@ end
 
 wire video_de = (hcnt >= H_START) && (hcnt < H_START + 720) && (vcnt >= V_START) && (vcnt < V_START + 576);
 
-// input debug bar in the top left corner: 2 rows of 16 squares, green = 1
-// row 1:
+// input debug bar in the top left corner: 16 squares, green = 1
 //   0-7  usb modifiers: lctrl lshift lalt lgui rctrl rshift ralt rgui
 //   8    a key in the usb report       9  kbd_mouse_level (toggles per event)
 //   10   mouse report (toggles)        11-13 mouse buttons l r m
 //   14   kbd_reset                     15 cpu reset
-// row 2 (disk images):
-//   0-3  img_sdc state                 4-5 its retries of the request
-//   6    sdc_busy                      7  floppy read request DF0   8 floppy write request DF0
-//   9    img_q_wr (a frame waits for the queue)   10 the reply queue to the mcu is full
 wire [15:0] dbg_bits = { cpu_reset, kbd_reset, mouse_buttons[2], mouse_buttons[1], mouse_buttons[0], ms_upd,
 	kbd_mouse_level, (kb_dat0 != 8'h00), kb_status[7], kb_status[6], kb_status[5], kb_status[4],
 	kb_status[3], kb_status[2], kb_status[1], kb_status[0] };
-wire [15:0] dbg_bits2 = { 5'd0, queue_full, img_q_wr, sdc_wr[0], sdc_rd[0], sdc_busy, img_dbg[5:0] };
 wire [10:0] dbg_x = hcnt - (H_START + 8);
 wire [9:0] dbg_y = vcnt - (V_START + 8);
-wire dbg_row2 = (dbg_y >= 10'd16);
-wire [9:0] dbg_yr = dbg_row2 ? dbg_y - 10'd16 : dbg_y;
-wire dbg_area = sw_debug && (hcnt >= H_START + 8) && (dbg_x < 11'd256) && (vcnt >= V_START + 8) && (dbg_y < 10'd28)
-	&& (dbg_yr < 10'd12) && (dbg_x[3:0] < 4'd12);
-wire dbg_on = dbg_row2 ? dbg_bits2[dbg_x[7:4]] : dbg_bits[dbg_x[7:4]];
+wire dbg_area = sw_debug && (hcnt >= H_START + 8) && (dbg_x < 11'd256) && (vcnt >= V_START + 8) && (dbg_y < 10'd12)
+	&& (dbg_x[3:0] < 4'd12);
+wire dbg_on = dbg_bits[dbg_x[7:4]];
 
 reg [23:0] hdmi_rgb;
 reg hdmi_hs, hdmi_vs, hdmi_de;

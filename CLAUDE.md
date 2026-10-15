@@ -55,7 +55,6 @@ Only the Mini G build exists so far. Its board glue (MCU link, HDMI, I2S DAC) co
     - `paula_floppy.v` (karabas change): a write dma goes on after `lenzero` until the fifo is empty. With the slow mcu writes the fifo holds the end of the track, which NanoMig dropped (lost sectors and a DSKBLK that never came).
     - Tests: `run_img_sim.sh` (`mcu.vhd` + `img_sdc.v` against a model of the firmware, incl. lost frames), `run_floppy_sim.sh <adf>` (track read at the real dma rate), `run_floppy_wr_sim.sh <adf>` (track write; `mfm_track.py` encodes the ADF track as trackdisk does, the sd model is slow now and then).
 - Not wired yet: the joysticks, and IDE images (the same path, `sdc` index 4-5, writes need a check of the IDE data latch).
-- The second row of the debug bar shows the `img_sdc` state, its retries, `sdc_busy`, the DF0 read / write requests and the reply queue state.
 - `src/rtl/{mcu,spi,hdmi,zhdmi,dac,fifo,memory}`: copies of the Karabas Go board modules from `karabas-go-core-profi`. `src/rtl/osd` comes from `karabas-go-core-tsconf`.
 - `upstream/`: the NanoMig Tang Nano 20K top (`tang_nano20k_top.sv`) and README. They are a reference for how `nanomig` is wired up, not part of the build.
 
