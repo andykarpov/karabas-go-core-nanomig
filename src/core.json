@@ -1,18 +1,21 @@
 {
     "id": "nanomig",
     "name": "Amiga 500 (NanoMig)",
-    "build": "26101603",
+    "build": "26101700",
     "bitstream": "karabas_go.bin",
     "visible": true,
     "type": "osd",
     "order": 20,
     "eeprom_bank": 255,
-    "roms": [
-        {"filename": "/amiga/kick.rom", "address": 3670016, "external": true}
-    ],
+    "rtc_mode": 3,
+    "roms": [],
     "osd": [
         {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1"},
         {"type": "F", "name": "DF1", "slot": 1, "extensions": ".adf", "hotkey": "Menu+F2"},
+        {"type": "F", "name": "DF2", "slot": 2, "extensions": ".adf", "hotkey": "Menu+F3"},
+        {"type": "F", "name": "DF3", "slot": 3, "extensions": ".adf", "hotkey": "Menu+F4"},
+        {"type": "FL", "name": "Kickstart", "slot": 7, "extensions": ".rom", "dir": "/amiga", "filename": "kick.rom", "autoload": 1},
+        {"type": "S", "name": "Drives", "options": ["1", "2", "3", "4"], "default": 1},
         {"type": "S", "name": "Chipset", "options": ["OCS-A500", "OCS-A1000", "ECS"], "default": 0},
         {"type": "S", "name": "Chip RAM", "options": ["512K", "1M", "1.5M", "2M"], "default": 0},
         {"type": "S", "name": "Slow RAM", "options": ["None", "512K", "1M", "1.5M"], "default": 1},

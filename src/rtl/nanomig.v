@@ -62,6 +62,12 @@ module nanomig (
    output	 cf_oe,
    input [15:0]	 cf_din,
 
+   // karabas: the MSM6242B clock registers (minimig.v), in the mcu
+   output [3:0]	 rtc_a,
+   output	 rtc_wr,
+   output [3:0]	 rtc_wdata,
+   input [3:0]	 rtc_rdata,
+
    // Interface MiSTeryNano sd card interface. This very simple connection allows the core
    // to request sectors from within a OSD selected image file
    input [7:0]	 sdc_img_mounted,
@@ -1210,7 +1216,12 @@ minimig minimig
 	.cf_reset_n   ( cf_reset_n      ),
 	.cf_dout      ( cf_dout         ),
 	.cf_oe        ( cf_oe           ),
-	.cf_din       ( cf_din          )
+	.cf_din       ( cf_din          ),
+
+	.rtc_a        ( rtc_a           ),
+	.rtc_wr       ( rtc_wr          ),
+	.rtc_wdata    ( rtc_wdata       ),
+	.rtc_rdata    ( rtc_rdata       )
 );
 
 Amber AMBER
