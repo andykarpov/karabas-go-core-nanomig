@@ -6,6 +6,9 @@
 // - the emulated INTRQ: identify, read sectors (an interrupt per sector, none after the last),
 //   set multiple + read multiple (an interrupt per block), write sectors (none for the first DRQ,
 //   one per sector written), a non-data command, nIEN;
+// - a card that changes its status only some time after the last word of a block (LAG_NS: on a
+//   read BSY = DRQ = 0 for a while, on a write DRQ stays set): the bridge must not take that for
+//   the end of the block; write multiple with a short last block; a sector count of 0 (256);
 // - the sector data in both directions, in the byte order of the card.
 
 module tb_gayle_cf;
@@ -49,7 +52,8 @@ endtask
 // ---------------- ATA device model ----------------
 
 localparam BUSY_NS = 3000;
-reg [7:0] disk [0:64*512-1];
+reg [7:0] disk [0:300*512-1];
+integer lag = 0; // ns from the last word of a block to the status change
 reg [7:0] r_err = 8'h00, r_count = 8'h01, r_sector = 8'h01, r_cyl_lo = 8'h00, r_cyl_hi = 8'h00, r_head = 8'h00;
 reg [7:0] r_status = 8'h50;
 reg [15:0] rd_word;
@@ -61,7 +65,7 @@ reg [15:0] ident [0:255];
 assign cf_bus = drive ? rd_word : 16'bzzzzzzzzzzzzzzzz;
 
 initial begin
-	for (i = 0; i < 64*512; i = i + 1) disk[i] = (i / 512) * 7 + i;
+	for (i = 0; i < 300*512; i = i + 1) disk[i] = (i / 512) * 7 + i;
 	for (i = 0; i < 256; i = i + 1) ident[i] = 16'h1000 + i;
 	ident[0] = 16'h848A; // CF
 end
@@ -125,7 +129,7 @@ always @(posedge cf_wr_n) begin
 				disk[lba * 512 + wpos] = cf_bus[7:0];
 				disk[lba * 512 + wpos + 1] = cf_bus[15:8];
 				wpos = wpos + 2;
-				if (wpos == 512) next_block_out;
+				if (wpos == blk * 512) next_block_out;
 			end
 			3'd2: r_count = cf_bus[7:0];
 			3'd3: r_sector = cf_bus[7:0];
@@ -149,6 +153,7 @@ task command(input [7:0] c);
 			8'h20: begin blk = 1; #(BUSY_NS) r_status = 8'h58; end
 			8'hC4: begin blk = (left < mult) ? left : mult; #(BUSY_NS) r_status = 8'h58; end
 			8'h30: begin blk = 1; #(BUSY_NS/10) r_status = 8'h58; end // write: DRQ at once
+			8'hC5: begin blk = (left < mult) ? left : mult; #(BUSY_NS/10) r_status = 8'h58; end
 			8'hC6: begin mult = r_count; #(BUSY_NS) r_status = 8'h50; end
 			default: begin #(BUSY_NS) r_status = 8'h50; end
 		endcase
@@ -164,6 +169,7 @@ task next_block_in;
 			r_status = 8'h50;
 		else begin
 			blk = (cmd == 8'hC4 && left < mult) ? left : (cmd == 8'hC4 ? mult : 1);
+			if (lag != 0) begin r_status = 8'h50; #(lag); end // neither BSY nor DRQ yet
 			r_status = 8'hD0; // BSY
 			#(BUSY_NS) r_status = 8'h58;
 		end
@@ -172,10 +178,12 @@ endtask
 
 task next_block_out;
 	begin
-		lba = lba + 1;
-		left = left - 1;
+		lba = lba + blk;
+		left = left - blk;
 		wpos = 0;
+		if (lag != 0) #(lag); // DRQ still set
 		r_status = 8'hD0;
+		blk = (cmd == 8'hC5 && left < mult) ? left : (cmd == 8'hC5 ? mult : 1);
 		#(BUSY_NS) r_status = (left == 0) ? 8'h50 : 8'h58;
 	end
 endtask
@@ -250,7 +258,7 @@ integer nirq_base;
 
 // a hung test (a wait that never ends) stops here
 initial begin
-	#100000000;
+	#300000000;
 	$display("%t ERROR watchdog", $time);
 	$display("tb_gayle_cf: %0d errors", errors + 1);
 	$finish;
@@ -347,6 +355,71 @@ initial begin
 	cpu_wrb(TF + 28, 8'h91);
 	#20000; check("interrupts with nIEN", nirq, 0);
 	cpu_wrb(ALT, 8'h00);
+
+	// a card slow to change its status after a block
+	lag = 1500;
+
+	// read sectors: 3 from 30
+	nirq = 0; nirq_base = 0;
+	cpu_wrb(TF + 8, 8'd3);
+	cpu_wrb(TF + 12, 8'd30);
+	cpu_wrb(TF + 28, 8'h20);
+	read_sectors(30, 3);
+	#20000; check("interrupts after the slow read", nirq, 3);
+
+	// write sectors: 2 to 40, the interrupt only at the real end
+	nirq = 0;
+	cpu_wrb(TF + 8, 8'd2);
+	cpu_wrb(TF + 12, 8'd40);
+	cpu_wrb(TF + 28, 8'h30);
+	cpu_rd(ALT); w = 0;
+	while (rdata[15:8] != 8'h58 && w < 100) begin cpu_rd(ALT); w = w + 1; end
+	for (w = 0; w < 256; w = w + 1) cpu_ww(TF, 16'hC000 + w);
+	wait_irq(1);
+	cpu_rd(TF + 28); check("status after slow write sector 1", rdata[15:8], 8'h58);
+	for (w = 0; w < 256; w = w + 1) cpu_ww(TF, 16'hD000 + w);
+	wait_irq(2);
+	cpu_rd(TF + 28); check("status at the interrupt after the slow write", rdata[15:8], 8'h50);
+	check("slow write byte 511", disk[41*512+511], 8'hFF);
+	check("slow write byte 510", disk[41*512+510], 8'hD0);
+
+	// set multiple 4, write multiple 6 sectors to 50: blocks of 4 and 2, an interrupt after each
+	nirq = 0;
+	cpu_wrb(TF + 8, 8'd4);
+	cpu_wrb(TF + 28, 8'hC6);
+	wait_irq(1);
+	cpu_rd(TF + 28);
+	nirq = 0;
+	cpu_wrb(TF + 8, 8'd6);
+	cpu_wrb(TF + 12, 8'd50);
+	cpu_wrb(TF + 28, 8'hC5);
+	cpu_rd(ALT); w = 0;
+	while (rdata[15:8] != 8'h58 && w < 100) begin cpu_rd(ALT); w = w + 1; end
+	for (w = 0; w < 1024; w = w + 1) cpu_ww(TF, w);
+	wait_irq(1);
+	cpu_rd(TF + 28); check("status after write multiple block 1", rdata[15:8], 8'h58);
+	for (w = 1024; w < 1536; w = w + 1) cpu_ww(TF, w);
+	wait_irq(2);
+	cpu_rd(TF + 28); check("status after write multiple", rdata[15:8], 8'h50);
+	check("write multiple last byte", disk[55*512+511], 8'hFF);
+	check("write multiple last byte-1", disk[55*512+510], 8'h05);
+
+	// read multiple, sector count 0 = 256 sectors from 1 (multiple 4 -> 64 blocks), slow card
+	nirq = 0;
+	cpu_wrb(TF + 8, 8'd0);
+	cpu_wrb(TF + 12, 8'd1);
+	cpu_wrb(TF + 28, 8'hC4);
+	for (i = 0; i < 64; i = i + 1) begin
+		wait_irq(i + 1);
+		cpu_rd(TF + 28);
+		check("status in the 256 sector read", rdata[15:8], 8'h58);
+		for (w = 0; w < 1024; w = w + 1) begin
+			cpu_rd(TF);
+			check("256 sector data", rdata, { disk[(1 + 4*i) * 512 + 2*w], disk[(1 + 4*i) * 512 + 2*w + 1] });
+		end
+	end
+	#20000; check("interrupts after the 256 sector read", nirq, 64);
+	cpu_rd(TF + 28); check("status after the 256 sector read", rdata[15:8], 8'h50);
 
 	$display("tb_gayle_cf: %0d errors", errors);
 	$finish;

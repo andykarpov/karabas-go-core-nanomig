@@ -20,8 +20,14 @@
 //   BSY is gone, then raises the interrupt as ATA does: a non-data command at its end; a PIO in
 //   command (read, identify) at each block with DRQ (not after the last one); a PIO out command
 //   (write) after each block written, not for the first DRQ. A block is 256 words, or the count
-//   of SET MULTIPLE for READ / WRITE MULTIPLE. The interrupt goes away when the cpu reads the
-//   status register or writes a command, and is off while nIEN is set in the device control.
+//   of SET MULTIPLE for READ / WRITE MULTIPLE (the last block can be shorter). The interrupt goes
+//   away when the cpu reads the status register or writes a command, and is off while nIEN is set
+//   in the device control;
+// - the bridge counts the sectors left in a data command (sector count, 0 = 256; LBA48 counts are
+//   not supported) and the data words of the block (from the first data access of a block, as the
+//   cpu can see DRQ and move data before a poll gets a card cycle), so a poll waits for the state
+//   it expects: DRQ while blocks are left, no DRQ after the last one (or ERR). A status read right
+//   after a block, before the card has set BSY or cleared DRQ, does not count as its end.
 //
 // Copyright 2008, 2009 by Jakub Bednarski
 // Copyright 2021 Alexey Melnikov
@@ -47,7 +53,10 @@ module gayle_cf #(
 	// cycle >= 600 ns
 	parameter T_SETUP = 3,
 	parameter T_PULSE = 6,
-	parameter T_CYCLE = 18
+	parameter T_CYCLE = 18,
+	// the poll after a data block starts this many clocks after its last word (2 us), so a card
+	// that is slow to set BSY / clear DRQ is not seen in its state of the block before
+	parameter T_SETTLE = 6'd57
 ) (
 	input	        clk,
 	input	        reset,
@@ -153,15 +162,22 @@ reg [15:0] rd_data = 16'd0;   // card data of the cpu read, cpu byte order
 
 reg        poll = 1'b0;       // waiting for BSY to go away
 reg        first_poll = 1'b0; // the poll after the command (not after a data block)
+reg [5:0]  settle = 6'd0;     // clocks until the poll after a block starts
 reg [1:0]  cls = CL_NODATA;   // class of the running command
 reg [7:0]  multiple = 8'd1;   // sectors per block of READ / WRITE MULTIPLE (SET MULTIPLE)
 reg [7:0]  count = 8'd0;      // last sector count written
 reg [7:0]  blk_sec = 8'd1;    // sectors per block of the running command
+reg [8:0]  sec_left = 9'd0;   // sectors of the running command whose block has not started
 reg [15:0] words = 16'd0;     // data words left in the block
 reg        nien = 1'b0;       // device control nIEN
 reg        intrq = 1'b0;      // emulated INTRQ of the card
 
 wire cpu_acc = sel_tfr && cyc && !cpu_done;
+
+// poll: the state the bridge waits for (BSY gone; DRQ while sectors are left, else no DRQ, or ERR)
+wire       more = (cls != CL_NODATA) && (sec_left != 9'd0);
+wire       poll_end = !cf_din[7] && (cls == CL_NODATA || cf_din[0] || cf_din[3] == more);
+wire [7:0] blk_now = (sec_left < { 1'b0, blk_sec }) ? sec_left[7:0] : blk_sec; // sectors of the next block
 assign nrdy = cpu_acc;
 
 // command class from its opcode
@@ -176,6 +192,8 @@ endfunction
 always @(posedge clk) begin
 	if (!(sel_tfr && cyc))
 		cpu_done <= 1'b0;
+	if (settle != 6'd0)
+		settle <= settle - 6'd1;
 
 	if (reset) begin
 		busy <= 1'b0;
@@ -200,7 +218,7 @@ always @(posedge clk) begin
 			cf_cs_n <= addr[12] ? 2'b01 : 2'b10;
 			cf_dout <= { data_in[7:0], data_in[15:8] };
 		end
-		else if (poll) begin
+		else if (poll && settle == 6'd0) begin
 			busy <= 1'b1;
 			cyc_cpu <= 1'b0;
 			cyc_rd <= 1'b1;
@@ -233,6 +251,10 @@ always @(posedge clk) begin
 							blk_sec <= (cf_dout[7:0] == 8'hC4 || cf_dout[7:0] == 8'hC5) ? multiple : 8'd1;
 							first_poll <= 1'b1;
 							words <= 16'd0;
+							if (cf_dout[7:0] == 8'hEC || cf_dout[7:0] == 8'hE4 || cf_dout[7:0] == 8'hE8)
+								sec_left <= 9'd1; // identify, read / write buffer: one sector
+							else
+								sec_left <= (count == 8'd0) ? 9'd256 : { 1'b0, count };
 							poll <= 1'b1;
 							if (cf_dout[7:0] == 8'hC6) // SET MULTIPLE
 								multiple <= (count == 8'd0) ? 8'd1 : count;
@@ -242,9 +264,18 @@ always @(posedge clk) begin
 						count <= cf_dout[7:0];
 					else if (cf_a == REG_DATA && words != 16'd0) begin
 						// the last word of a block: wait for the next block / the end
-						if (words == 16'd1)
+						if (words == 16'd1) begin
 							poll <= 1'b1;
+							settle <= T_SETTLE;
+							first_poll <= 1'b0;
+						end
 						words <= words - 16'd1;
+					end
+					else if (cf_a == REG_DATA && more) begin
+						// the first word of a block (counted here, not by the poll: the cpu can
+						// see DRQ and move data before a poll gets a card cycle)
+						words <= { blk_now, 8'd0 } - 16'd1;
+						sec_left <= sec_left - blk_now;
 					end
 				end
 				else if (cf_a == REG_ALT && !cyc_rd) begin // device control
@@ -255,15 +286,14 @@ always @(posedge clk) begin
 					end
 				end
 			end
-			else if (!cf_din[7]) begin
-				// poll: BSY is gone
+			else if (poll_end) begin
+				// poll: BSY is gone and the card is in the state expected
 				poll <= 1'b0;
-				words <= cf_din[3] ? { blk_sec, 8'd0 } : 16'd0; // DRQ: a block of data
 				first_poll <= 1'b0;
 				// in: each block with DRQ, or the end (an error) of the command without data;
 				// out: each block written, or the end of the command without DRQ (an error)
 				case (cls)
-					CL_IN:   intrq <= cf_din[3] | first_poll;
+					CL_IN:   intrq <= cf_din[3] | first_poll | cf_din[0];
 					CL_OUT:  intrq <= ~first_poll | ~cf_din[3];
 					default: intrq <= 1'b1;
 				endcase
