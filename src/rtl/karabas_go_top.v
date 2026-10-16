@@ -701,8 +701,15 @@ end
 
 //---------- Audio ------------
 
-wire [15:0] audio_l = { audio_left, 1'b0 };
-wire [15:0] audio_r = { audio_right, 1'b0 };
+// the A500 low-pass (4.5 kHz) and 16-bit signed samples at the NanoMig level (full scale -6 dB)
+wire [15:0] audio_l, audio_r;
+audio_filter audio_filter(
+	.clk(clk_sys),
+	.in_l(audio_left),
+	.in_r(audio_right),
+	.out_l(audio_l),
+	.out_r(audio_r)
+);
 
 // level meters of the mcu
 audio_peaks audio_peaks(

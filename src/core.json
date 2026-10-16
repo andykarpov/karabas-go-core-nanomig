@@ -1,7 +1,7 @@
 {
     "id": "nanomig",
     "name": "Amiga 500 (NanoMig)",
-    "build": "26101601",
+    "build": "26101603",
     "bitstream": "karabas_go.bin",
     "visible": true,
     "type": "osd",
