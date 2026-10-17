@@ -318,17 +318,14 @@ mcu #(.BURST_MAX_MHZ(0)) mcu(
 );
 
 //---------- Soft switches (the order of the osd items in core_mini.json) ------------
-// items 0-3 are the file mounters DF0-DF3, item 4 the Kickstart file and item 13 the HDF file (no
-// switches); Reset is always the last item
+// items 0-3 are the file mounters DF0-DF3, items 5-6 the HDF files HDF0 / HDF1 and item 7 the
+// Kickstart file (no switches); Reset is always the last item
 
-reg [1:0] sw_drives = 2'd1;    // floppy drives - 1: DF0 .. DF3
+reg [1:0] sw_hdd = 2'd0;       // IDE device 0 (Gayle): 0 = off, 1 = the CF card, 2 = the HDF0 image
 reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
 reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
-reg       sw_debug = 1'b0;     // input debug bar
-reg       sw_wprot = 1'b1;     // floppy write protect
-reg [1:0] sw_hdd = 2'd0;       // the IDE drive (Gayle): 0 = off, 1 = the CF card, 2 = the HDF image
 reg       sw_reset = 1'b0;
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
@@ -336,16 +333,12 @@ always @(posedge clk_sys) begin
 	if (prev_softsw_command != softsw_command) begin
 		prev_softsw_command <= softsw_command;
 		case (softsw_command[15:8])
-			8'h05: sw_drives <= softsw_command[1:0];
-			8'h06: sw_chipset <= softsw_command[1:0];
-			8'h07: sw_chipmem <= softsw_command[1:0];
-			8'h08: sw_slowmem <= softsw_command[1:0];
-			8'h09: sw_ntsc <= softsw_command[0];
-			8'h0A: sw_debug <= softsw_command[0];
-			8'h0B: sw_wprot <= ~softsw_command[0]; // 0 = On
-			8'h0C: sw_hdd <= softsw_command[1:0];
-			// 8'h0D: the HDF file (slot 4), no switch
-			8'h0E: sw_reset <= softsw_command[0];
+			8'h04: sw_hdd <= softsw_command[1:0];
+			8'h08: sw_chipset <= softsw_command[1:0];
+			8'h09: sw_chipmem <= softsw_command[1:0];
+			8'h0A: sw_slowmem <= softsw_command[1:0];
+			8'h0B: sw_ntsc <= softsw_command[0];
+			8'h0C: sw_reset <= softsw_command[0];
 			default: ;
 		endcase
 	end
@@ -421,10 +414,12 @@ wire [2:0] sdc_slot;           // the sdc index img_sdc serves
 wire [7:0] fdc_rd, fdc_wr;     // nanomig: the floppies, sdc index 0-3
 wire [31:0] fdc_sector;
 wire [7:0] fdc_out_data;
-wire hdf_rd, hdf_wr;           // hdf_ata: sdc index 4
+wire [1:0] hdf_rd, hdf_wr;     // hdf_ata: sdc index 4 (HDF0, IDE device 0), 5 (HDF1, device 1)
 wire [31:0] hdf_sector;
 wire [7:0] hdf_out_data;
 wire [15:0] hdf_dout;
+wire hdf_dev;                  // the IDE device the host talks to (DEV)
+wire hdf_dev1_here;            // HDF1 has an image
 wire [1:0] cf_cs_n;
 
 wire clk7_en, clk7n_en;
@@ -440,19 +435,36 @@ reg  [15:0] ram_din;
 wire [5:0] chipset_config = { 1'b0, sw_chipset, sw_ntsc, 1'b0 };
 wire [7:0] memory_config = { 4'b0000, sw_slowmem, sw_chipmem };
 wire [2:0] fastram_config = 3'b000;
-wire [3:0] floppy_config = { sw_drives, sw_wprot, 1'b0 }; // drives - 1, write protect, no turbo
+wire [3:0] floppy_config = { drives, 2'b00 }; // drives - 1, no write protect, no turbo
 wire [3:0] video_config = 4'b0000; // Amber filters off, scanlines not built
 wire [15:0] cf_dout;
 wire cf_oe;
-wire [5:0] ide_config = { 5'b00000, sw_hdd != 2'd0 }; // Gayle on: the IDE drive is the CF card or the HDF
-wire hdf_sel = (sw_hdd == 2'd2); // the IDE bus of gayle_cf goes to hdf_ata, the CF card is not selected
+// Gayle on: device 0 is the CF card or HDF0, or HDF1 has an image. hdf_ata serves both devices on
+// the IDE bus of gayle_cf (device 0 only when it is HDF0); the CF card gets the cycles when it is
+// device 0, and its data are taken while device 0 is selected
+wire [5:0] ide_config = { 5'b00000, sw_hdd != 2'd0 || hdf_dev1_here };
+wire cf_sel = (sw_hdd == 2'd1);
+wire cf_data = cf_sel && !hdf_dev;
+
+// the floppy drives the Amiga finds: DF0 up to the highest DF with an image, taken while the Amiga
+// is in reset (it looks for the drives once, at its start)
+reg [3:1] df_img = 3'b000;
+reg [1:0] drives = 2'd0;       // drives - 1
+always @(posedge clk_sys) begin : drives_blk
+	integer n;
+	for (n = 1; n < 4; n = n + 1)
+		if (sdc_img_mounted[n])
+			df_img[n] <= (sdc_img_size != 64'd0);
+	if (cpu_reset)
+		drives <= df_img[3] ? 2'd3 : df_img[2] ? 2'd2 : df_img[1] ? 2'd1 : 2'd0;
+end
 
 // img_sdc serves one sdc index at a time; each requester takes busy, done and the bytes of its own
 // index only (paula_floppy would take the ack of the HDF request as its own)
 wire fdc_own = (sdc_slot[2] == 1'b0);
-wire hdf_own = (sdc_slot == 3'd4);
-assign sdc_rd = { 3'b000, hdf_rd, fdc_rd[3:0] };
-assign sdc_wr = { 3'b000, hdf_wr, fdc_wr[3:0] };
+wire hdf_own = (sdc_slot[2:1] == 2'b10);
+assign sdc_rd = { 2'b00, hdf_rd, fdc_rd[3:0] };
+assign sdc_wr = { 2'b00, hdf_wr, fdc_wr[3:0] };
 assign sdc_sector = (fdc_rd[3:0] != 4'd0 || fdc_wr[3:0] != 4'd0) ? fdc_sector : hdf_sector; // the lowest index first, as img_sdc
 assign sdc_byte_out_data = hdf_own ? hdf_out_data : fdc_out_data;
 
@@ -536,7 +548,7 @@ nanomig nanomig(
 	.cf_reset_n(WRESET_N),
 	.cf_dout(cf_dout),
 	.cf_oe(cf_oe),
-	.cf_din(hdf_sel ? hdf_dout : WD),
+	.cf_din(cf_data ? WD : hdf_dout),
 
 	.rtc_a(rtc_a),
 	.rtc_wr(rtc_wr),
@@ -544,15 +556,18 @@ nanomig nanomig(
 	.rtc_rdata(rtc_rdata8[3:0])
 );
 
-assign WCS_N = hdf_sel ? 2'b11 : cf_cs_n;
-assign WD = (cf_oe && !hdf_sel) ? cf_dout : 16'bzzzzzzzzzzzzzzzz;
+assign WCS_N = cf_sel ? cf_cs_n : 2'b11;
+assign WD = (cf_oe && cf_sel) ? cf_dout : 16'bzzzzzzzzzzzzzzzz;
 
-//---------- HDF image: an ATA drive on the IDE bus of gayle_cf (sdc index 4) ------------
+//---------- HDF images: ATA devices 0 and 1 on the IDE bus of gayle_cf (sdc index 4, 5) ------------
 
 hdf_ata hdf_ata(
 	.clk(clk_sys),
 	.reset(areset),
 	.ata_reset(~WRESET_N),
+	.dev0_en(sw_hdd == 2'd2),
+	.dev(hdf_dev),
+	.dev1_here(hdf_dev1_here),
 
 	.a(WA),
 	.cs_n(cf_cs_n),
@@ -561,7 +576,7 @@ hdf_ata hdf_ata(
 	.din(cf_dout),
 	.dout(hdf_dout),
 
-	.img_mounted(sdc_img_mounted[4]),
+	.img_mounted(sdc_img_mounted[5:4]),
 	.img_size(sdc_img_size),
 	.sdc_rd(hdf_rd),
 	.sdc_wr(hdf_wr),
@@ -740,26 +755,10 @@ end
 
 wire video_de = (hcnt >= H_START) && (hcnt < H_START + 720) && (vcnt >= V_START) && (vcnt < V_START + 576);
 
-// input debug bar in the top left corner: 16 squares, green = 1
-//   0-7  usb modifiers: lctrl lshift lalt lgui rctrl rshift ralt rgui
-//   8    a key in the usb report       9  kbd_mouse_level (toggles per event)
-//   10   mouse report (toggles)        11-13 mouse buttons l r m
-//   14   kbd_reset                     15 cpu reset
-wire [15:0] dbg_bits = { cpu_reset, kbd_reset, mouse_buttons[2], mouse_buttons[1], mouse_buttons[0], ms_upd,
-	kbd_mouse_level, (kb_dat0 != 8'h00), kb_status[7], kb_status[6], kb_status[5], kb_status[4],
-	kb_status[3], kb_status[2], kb_status[1], kb_status[0] };
-wire [10:0] dbg_x = hcnt - (H_START + 8);
-wire [9:0] dbg_y = vcnt - (V_START + 8);
-wire dbg_area = sw_debug && (hcnt >= H_START + 8) && (dbg_x < 11'd256) && (vcnt >= V_START + 8) && (dbg_y < 10'd12)
-	&& (dbg_x[3:0] < 4'd12);
-wire dbg_on = dbg_bits[dbg_x[7:4]];
-
 reg [23:0] hdmi_rgb;
 reg hdmi_hs, hdmi_vs, hdmi_de;
 always @(posedge clk_sys) begin
-	hdmi_rgb <= !video_de ? 24'h000000 :
-	            dbg_area ? (dbg_on ? 24'h00E000 : 24'h602020) :
-	            { red, red, green, green, blue, blue };
+	hdmi_rgb <= !video_de ? 24'h000000 : { red, red, green, green, blue, blue };
 	hdmi_hs <= hs;
 	hdmi_vs <= vs;
 	hdmi_de <= video_de;
