@@ -8,7 +8,9 @@
 // TODO:
 // - check IDE head adressing heads[0] vs heads[drive]
 
-module nanomig (
+module nanomig #(
+   parameter FLOPPY_EXT = 0 // karabas: 1 = physical floppy drives (paula_floppy_ext.v, Karabas Go); 0 = none, the module is not built
+) (
    input	 clk_sys,
    input	 reset,
    input	 por,
@@ -34,6 +36,11 @@ module nanomig (
    input [2:0]	 fastram_config,
    input [5:0]	 chipset_config,
    input [3:0]	 floppy_config,
+   // karabas: physical floppy drives (minimig-aga/paula_floppy_ext.v)
+   input [7:0]	 floppy_ext, // DFn: [2n+1:2n] = 0 image, 1 drive DS0, 2 drive DS1
+   input [3:0]	 floppy_ext_chg, // one clock: DFn was chosen again (disk change)
+   input [3:0]	 fdd_in, // { rdata, wprt, tr00, index }, high = active
+   output [7:0]	 fdd_out, // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
    input [3:0]	 video_config,
    input [5:0]	 ide_config,
 		
@@ -1095,7 +1102,7 @@ wire [15:0] JOYA0 = 16'h0000;
 wire [15:0] JOYA1 = 16'h0000;
 wire [63:0] RTC = 64'h0;
    
-minimig minimig
+minimig #(.FLOPPY_EXT(FLOPPY_EXT)) minimig
 (
 	//m68k pins
 	.cpu_address  (chip_addr        ), // M68K address bus
@@ -1114,6 +1121,10 @@ minimig minimig
         .memory_config (memory_config   ), // ram sizes
         .chipset_config(chipset_config  ), 
         .floppy_config (floppy_config   ), 
+	.floppy_ext    (floppy_ext      ),
+	.floppy_ext_chg(floppy_ext_chg  ),
+	.fdd_in        (fdd_in          ),
+	.fdd_out       (fdd_out         ),
         .ide_config    (ide_config      ), 
 
 	//sram pins

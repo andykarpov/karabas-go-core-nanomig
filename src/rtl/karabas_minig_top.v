@@ -470,6 +470,10 @@ nanomig nanomig(
 	.fastram_config(fastram_config),
 	.chipset_config(chipset_config),
 	.floppy_config(floppy_config),
+	.floppy_ext(8'd0),             // no floppy connector
+	.floppy_ext_chg(4'd0),
+	.fdd_in(4'd0),
+	.fdd_out(),
 	.video_config(video_config),
 	.ide_config(ide_config),
 

@@ -56,7 +56,9 @@
 // 2013-03-21 - translated & added a new more compatible uart core written by madeho@minimig.net
 
 
-module paula
+module paula #(
+	parameter FLOPPY_EXT = 0 // karabas: 1 = physical floppy drives (paula_floppy_ext.v, Karabas Go); 0 = none, the module is not built
+)
 (
 	// system bus interface
 	input         clk,         // 28 MHz system clock
@@ -117,7 +119,12 @@ module paula
 	output [8:0] rdata_okk, 	//right DAC data (PWM volume)
 	// system configuration
 	input	  [1:0] floppy_drives,	//number of extra floppy drives
-	input	        floppy_wrprot	//floppies are write protected
+	input	        floppy_wrprot,	//floppies are write protected
+	// karabas: physical floppy drives (paula_floppy_ext.v)
+	input	  [7:0] floppy_ext,	// DFn: [2n+1:2n] = 0 image, 1 drive DS0, 2 drive DS1
+	input	  [3:0] floppy_ext_chg,	// one clock: DFn was chosen again (disk change)
+	input	  [3:0] fdd_in,		// { rdata, wprt, tr00, index }, high = active
+	output	  [7:0] fdd_out		// { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
 );
 //--------------------------------------------------------------------------------------
 
@@ -240,7 +247,7 @@ paula_intcontroller pi1
 );
 
 //instantiate floppy controller / flashdrive host interface
-paula_floppy pf1
+paula_floppy #(.FLOPPY_EXT(FLOPPY_EXT)) pf1
 (
 	.clk(clk),
 	.clk7_en (clk7_en),
@@ -282,7 +289,13 @@ paula_floppy pf1
 	.sdc_byte_in_strobe(sdc_byte_in_strobe),
 	.sdc_byte_addr(sdc_byte_addr),
 	.sdc_byte_in_data(sdc_byte_in_data),
-        .sdc_byte_out_data(sdc_byte_out_data)
+        .sdc_byte_out_data(sdc_byte_out_data),
+
+	.precomp(adkcon[14:13]),
+	.floppy_ext(floppy_ext),
+	.floppy_ext_chg(floppy_ext_chg),
+	.fdd_in(fdd_in),
+	.fdd_out(fdd_out)
 );
 
 //instantiate audio controller
