@@ -1,14 +1,17 @@
 `timescale 1ns / 1ps
 
-// The CF card slot through the whole Mini G top: HDD = CF card (soft switch 12), and a 68000
+// The CF card slot through the whole Mini G top: HDD0 = CF card (soft switch 4), and a 68000
 // program in place of the Kickstart code at $FC00D2 (in the SRAM model) talks to the Gayle IDE
 // registers: IDENTIFY, waits for the Gayle interrupt, reads the 256 words into slow ram, then
 // writes them back to LBA 3 with WRITE SECTORS (waits for DRQ on the alternate status, then for
 // the interrupt) and writes COLOR00 = $F00. The CF card is an ATA device model (as tb_gayle_cf).
 // Checks the byte order in memory and on the card, and that the program gets to its end.
-// HDF = 1: HDD = HDF (soft switch 12 = 2), the drive is hdf_ata on an image in slot 4 of the
+// HDF = 1: HDD0 = HDF0 (soft switch 4 = 2), the drive is hdf_ata on an image in slot 4 of the
 // file mounter, served by a model of the mcu firmware over the spi link (as tb_img.v); the CF
 // card must see no cycle.
+// HDF = 2: HDD0 = CF card and an image in slot 5 (HDF1, IDE device 1); the program selects
+// device 1 and has to get the data of the image (the top takes hdf_ata, not the card bus). An
+// ADF in DF2 gives 3 floppy drives.
 // Ends with "tb_hdd: N errors".
 
 module tb_hdd;
@@ -261,7 +264,7 @@ task serve;
 		if (req_pending) begin
 			req_pending = 0;
 			$display("%t mcu: request slot %0d op %0d lba %0d", $time, req_slot, req_op, req_lba);
-			check("request slot", req_slot, 4);
+			check("request slot", req_slot, (HDF == 2) ? 5 : 4);
 			if (req_op == 1) begin
 				n_rd = n_rd + 1;
 				sum = 0;
@@ -517,7 +520,7 @@ always @(posedge dut.clk_sys) begin
 end
 
 integer ncf = 0;
-always @(negedge cf_rd_n or negedge cf_wr_n) if (HDF && cf_cs_n != 2'b11) begin
+always @(negedge cf_rd_n or negedge cf_wr_n) if (HDF == 1 && cf_cs_n != 2'b11) begin
 	errors = errors + 1;
 	$display("%t ERROR a cycle on the CF card in HDF mode", $time);
 end
@@ -541,16 +544,30 @@ initial begin
 	#200000; // pll lock
 	if (HDF) begin
 		for (w = 0; w < 64*512; w = w + 1) hd[w] = w[7:0] ^ (w >> 9);
-		frame(8'h05, 8'h0C, 8'h02);   // HDD = HDF (osd item 12)
-		// mount slot 4 (the HDF item): size 0, then 64 sectors
-		frame(8'h40, 8'h00, 8'h04);
+		if (HDF == 2) begin
+			frame(8'h05, 8'h04, 8'h01);   // HDD0 = CF card (osd item 4)
+			// the program selects device 1: move.b #$F0,$A018(a0)
+			sram_lo[21'h1C0070] = 8'hF0; sram_lo[21'h1E0070] = 8'hF0;
+		end
+		else
+			frame(8'h05, 8'h04, 8'h02);   // HDD0 = HDF0 (osd item 4)
+		// mount slot 4 (HDF0) or 5 (HDF1): size 0, then 64 sectors
+		frame(8'h40, 8'h00, (HDF == 2) ? 8'h05 : 8'h04);
 		for (w = 0; w < 8; w = w + 1) frame(8'h41, w, 8'h00);
 		for (w = 0; w < 8; w = w + 1) frame(8'h41, w, (64'd32768 >> (8 * w)) & 8'hFF);
 		// hdf_ata reads sector 0 for the RDB
 		w = 0;
-		while (dut.hdf_ata.geo_ok !== 1'b1 && w < 2000) begin serve; w = w + 1; end
-		check("geometry after mount", dut.hdf_ata.geo_ok, 1'b1);
-		check("hdf cylinders", dut.hdf_ata.id_cyl, 0); // 64 sectors < 16 * 63: no cylinder
+		while (dut.hdf_ata.geo_ok[HDF - 1] !== 1'b1 && w < 2000) begin serve; w = w + 1; end
+		check("geometry after mount", dut.hdf_ata.geo_ok[HDF - 1], 1'b1);
+		check("hdf cylinders", dut.hdf_ata.id_cyl[HDF - 1], 0); // 64 sectors < 16 * 63: no cylinder
+		check("gayle on", dut.ide_config[0], 1'b1);
+		if (HDF == 2) begin
+			// an ADF in DF2 while the Amiga is in reset: it finds DF0-DF2
+			frame(8'h40, 8'h00, 8'h02);
+			for (w = 0; w < 8; w = w + 1) frame(8'h41, w, (64'd901120 >> (8 * w)) & 8'hFF);
+			#1000;
+			check("drives with DF2", dut.floppy_config[3:2], 2'd2);
+		end
 		frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 		$display("%t init done, sw_hdd %b", $time, dut.sw_hdd);
 		w = 0;
@@ -568,7 +585,7 @@ initial begin
 		$display("tb_hdd: %0d errors", errors);
 		$finish;
 	end
-	frame(8'h05, 8'h0C, 8'h01);   // HDD = CF card (osd item 12)
+	frame(8'h05, 8'h04, 8'h01);   // HDD0 = CF card (osd item 4)
 	frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 	$display("%t init done, sw_hdd %b", $time, dut.sw_hdd);
 	w = 0;

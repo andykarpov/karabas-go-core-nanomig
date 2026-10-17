@@ -7,9 +7,15 @@
  An ATA hard disk on an image file (HDF) of the mcu file mounter, for the IDE bus of gayle_cf.v:
  it sits where the CF card is (cf_a, cf_cs_n, cf_rd_n, cf_wr_n, cf_dout -> din, dout -> cf_din),
  so gayle_cf with its emulated INTRQ works on it unchanged. The sectors go through img_sdc.v
- (sdc index 4).
+ (sdc index 4 for device 0, 5 for device 1).
 
- - device 0 only. With no image, or with device 1 selected, every register reads 0 (no device);
+ - two devices on one task file, as ATA has it: the command block registers are written to both,
+   the command is done by the selected one (DEV). Each has its own image, geometry, status and
+   error. Device 0 is here only with dev0_en (else the CF card or nothing is device 0). A device
+   without an image reads 0 in every register (no device). The task file is written by the host
+   whenever no command runs, image or not, so that dev follows the DEV bit for the mux of the
+   top (the CF card as device 0, this one as device 1);
+ - one command or mount examination at a time: while an image is examined both devices are busy;
  - the bus is that of the card: DD7..0 is the first byte of a sector word, the registers are in
    DD7..0. A register access is done at the end of its strobe (rd_n / wr_n going high), as
    gayle_cf samples the read data in the last clock of the strobe;
@@ -36,6 +42,9 @@ module hdf_ata #(
 	input wire clk,
 	input wire reset,          // power on: forgets the image
 	input wire ata_reset,      // the reset line of the bus (Amiga reset)
+	input wire dev0_en,        // device 0 is this one (HDD0 = HDF)
+	output wire dev,           // DEV of the task file: the device the host talks to
+	output wire dev1_here,     // device 1 has an image
 
 	// the IDE bus of gayle_cf
 	input wire [2:0] a,
@@ -45,11 +54,12 @@ module hdf_ata #(
 	input wire [15:0] din,
 	output reg [15:0] dout = 16'd0,
 
-	// the image: one sdc index of img_sdc (busy, done, error and the strobe of this index only)
-	input wire img_mounted,
+	// the images: two sdc indices of img_sdc, [0] device 0, [1] device 1 (busy, done, error and
+	// the strobe of these indices only)
+	input wire [1:0] img_mounted,
 	input wire [63:0] img_size,
-	output reg sdc_rd = 1'b0,
-	output reg sdc_wr = 1'b0,
+	output reg [1:0] sdc_rd = 2'b00,
+	output reg [1:0] sdc_wr = 2'b00,
 	output reg [31:0] sdc_sector = 32'd0,
 	input wire sdc_busy,
 	input wire sdc_done,
@@ -93,34 +103,48 @@ wire cs1 = !cs_n[1] && cs_n[0];
 
 //---------- Image and geometry ------------
 
-reg        present = 1'b0;    // an image is mounted
-reg        geo_ok = 1'b0;     // its geometry is known
-reg        mnt = 1'b0;        // a new image to examine
-reg [31:0] total = 32'd0;     // sectors of the image
-reg [15:0] id_cyl = 16'd0;
-reg [4:0]  id_heads = 5'd16;
-reg [7:0]  id_spt = 8'd63;
-reg [4:0]  cur_heads = 5'd16; // CHS translation (INITIALIZE DEVICE PARAMETERS)
-reg [7:0]  cur_spt = 8'd63;
+// per device ([0], [1])
+reg [1:0]  present = 2'b00;   // an image is mounted
+reg [1:0]  geo_ok = 2'b00;    // its geometry is known
+reg [1:0]  mnt = 2'b00;       // a new image to examine
+reg [31:0] total [0:1];       // sectors of the image
+reg [15:0] id_cyl [0:1];
+reg [4:0]  id_heads [0:1];
+reg [7:0]  id_spt [0:1];
+reg [4:0]  cur_heads [0:1];   // CHS translation (INITIALIZE DEVICE PARAMETERS)
+reg [7:0]  cur_spt [0:1];
+reg [7:0]  r_err [0:1];
+reg [7:0]  r_status [0:1];
+
+reg        gdev = 1'b0;       // the device of the mount examination
 reg        rdb_ok = 1'b0;     // sector 0 is an RDB with a CHS geometry
 reg [31:0] rdb_cyl = 32'd0, rdb_spt = 32'd0, rdb_heads = 32'd0;
 reg [31:0] div_rem = 32'd0;
+reg [15:0] geo_cyl = 16'd0;
+
+reg  [3:0]  state = ST_IDLE;
 
 //---------- Task file ------------
 
-reg [7:0] r_err = 8'h01;
 reg [7:0] r_count = 8'h01;
 reg [7:0] r_sector = 8'h01;
 reg [7:0] r_cyl_lo = 8'h00;
 reg [7:0] r_cyl_hi = 8'h00;
 reg [7:0] r_head = 8'h00;     // device / head
-reg [7:0] r_status = 8'h00;
 reg       r_srst = 1'b0;      // device control SRST
 
-wire       dev1 = r_head[4];
+wire       sel = r_head[4];   // the selected device (DEV)
 wire       lba_mode = r_head[6];
-wire       here = present && !dev1;
-wire [7:0] status = !geo_ok ? 8'h80 : r_status;
+wire       here = sel ? present[1] : (present[0] && dev0_en);
+wire       examining = (state == ST_GEO || state == ST_GEO_DIV);
+wire [7:0] status = (!geo_ok[sel] || examining) ? 8'h80 : r_status[sel];
+assign dev = sel;
+assign dev1_here = present[1];
+
+// the geometry of the selected device
+wire [31:0] s_total = total[sel];
+wire [4:0]  s_heads = cur_heads[sel];
+wire [7:0]  s_spt = cur_spt[sel];
 
 //---------- Sector buffer (block ram, one write port, one synchronous read port) ------------
 
@@ -130,7 +154,6 @@ reg         we = 1'b0;
 reg  [7:0]  wa = 8'd0;
 reg  [15:0] wd = 16'd0;
 reg  [7:0]  ptr = 8'd0;       // word of the host
-reg  [3:0]  state = ST_IDLE;
 wire [7:0]  ra = (state == ST_STORE) ? sdc_byte_addr[8:1] : ptr;
 always @(posedge clk) begin
 	q <= mem[ra];
@@ -190,7 +213,7 @@ function [15:0] ident;
 	end
 endfunction
 
-wire [31:0] cap = (total[31:28] != 4'd0) ? 32'h0FFFFFFF : total;
+wire [31:0] cap = (s_total[31:28] != 4'd0) ? 32'h0FFFFFFF : s_total;
 
 //---------- Commands ------------
 
@@ -209,9 +232,23 @@ localparam [7:0] ST_BSY = 8'h80;
 
 assign led = sdc_wait;
 
+// the error and status of the device of the command
+task set_st;
+	input [7:0] st;
+	begin
+		r_status[sel] <= st;
+	end
+endtask
+task set_err;
+	input [7:0] e;
+	begin
+		r_err[sel] <= e;
+	end
+endtask
+
 // CHS: next sector of the task file
-wire       chs_last_sec = (r_sector >= cur_spt);
-wire       chs_last_head = ({ 1'b0, r_head[3:0] } >= cur_heads - 5'd1);
+wire       chs_last_sec = (r_sector >= s_spt);
+wire       chs_last_head = ({ 1'b0, r_head[3:0] } >= s_heads - 5'd1);
 wire [27:0] lba_next = { r_head[3:0], r_cyl_hi, r_cyl_lo, r_sector } + 28'd1;
 
 // cylinder * heads + head
@@ -245,9 +282,13 @@ task next_sector_regs;
 	end
 endtask
 
+// the task file takes writes while no command runs (a command waiting for the host included)
+wire tf_ok = (state == ST_IDLE || state == ST_DRQIN || state == ST_DRQOUT || examining);
 // a command can start when no command runs, or one waits for the host (it is dropped)
-wire cmd_ok = (state == ST_IDLE || state == ST_DRQIN || state == ST_DRQOUT) && !mnt && geo_ok;
+wire cmd_ok = (state == ST_IDLE || state == ST_DRQIN || state == ST_DRQOUT) && !mnt[sel] && geo_ok[sel];
+wire cmd_start = !reset && !(pend_reset && !sdc_wait) && wr_end && cs0 && a == 3'd7 && here && cmd_ok;
 
+integer i;
 always @(posedge clk) begin
 	we <= 1'b0;
 
@@ -257,7 +298,7 @@ always @(posedge clk) begin
 	else if (cs0) begin
 		case (a)
 			3'd0: dout <= q;
-			3'd1: dout <= { 8'h00, r_err };
+			3'd1: dout <= { 8'h00, r_err[sel] };
 			3'd2: dout <= { 8'h00, r_count };
 			3'd3: dout <= { 8'h00, r_sector };
 			3'd4: dout <= { 8'h00, r_cyl_lo };
@@ -272,17 +313,18 @@ always @(posedge clk) begin
 		dout <= 16'h0000;
 
 	// mount: size 0 is an eject
-	if (img_mounted) begin
-		present <= (img_size[40:9] != 32'd0);
-		total <= img_size[40:9];
-		geo_ok <= 1'b0;
-		mnt <= (img_size[40:9] != 32'd0);
-	end
+	for (i = 0; i < 2; i = i + 1)
+		if (img_mounted[i]) begin
+			present[i] <= (img_size[40:9] != 32'd0);
+			total[i] <= img_size[40:9];
+			geo_ok[i] <= 1'b0;
+			mnt[i] <= (img_size[40:9] != 32'd0);
+		end
 
 	// the request is taken: drop it
 	if (sdc_busy) begin
-		sdc_rd <= 1'b0;
-		sdc_wr <= 1'b0;
+		sdc_rd <= 2'b00;
+		sdc_wr <= 2'b00;
 	end
 
 	// sector bytes from img_sdc into the buffer, and the RDB of a mount
@@ -309,7 +351,7 @@ always @(posedge clk) begin
 	end
 
 	// task file writes
-	if (wr_end && cs0 && cmd_ok && a != 3'd0 && a != 3'd7) begin
+	if (wr_end && cs0 && tf_ok && a != 3'd0 && a != 3'd7) begin
 		case (a)
 			3'd2: r_count <= din[7:0];
 			3'd3: r_sector <= din[7:0];
@@ -329,11 +371,11 @@ always @(posedge clk) begin
 
 	if (reset) begin
 		state <= ST_IDLE;
-		present <= 1'b0;
-		geo_ok <= 1'b0;
-		mnt <= 1'b0;
-		sdc_rd <= 1'b0;
-		sdc_wr <= 1'b0;
+		present <= 2'b00;
+		geo_ok <= 2'b00;
+		mnt <= 2'b00;
+		sdc_rd <= 2'b00;
+		sdc_wr <= 2'b00;
 		sdc_wait <= 1'b0;
 		pend_reset <= 1'b1;
 	end
@@ -344,24 +386,28 @@ always @(posedge clk) begin
 		pend_reset <= ata_reset || r_srst;
 		if (state != ST_GEO_DIV)
 			state <= ST_IDLE;
-		r_err <= 8'h01;   // diagnostics passed, signature of a disk
 		r_count <= 8'h01;
 		r_sector <= 8'h01;
 		r_cyl_lo <= 8'h00;
 		r_cyl_hi <= 8'h00;
 		r_head <= 8'h00;
-		r_status <= ST_OK;
-		cur_heads <= id_heads;
-		cur_spt <= id_spt;
+		for (i = 0; i < 2; i = i + 1) begin
+			r_err[i] <= 8'h01;   // diagnostics passed, signature of a disk
+			r_status[i] <= ST_OK;
+			cur_heads[i] <= id_heads[i];
+			cur_spt[i] <= id_spt[i];
+		end
 	end
 	if (!(pend_reset && !sdc_wait) || state == ST_IDLE || state == ST_GEO_DIV) case (state)
 		ST_IDLE:
-			if (mnt) begin
-				// a new image: read its sector 0 for the RDB
-				mnt <= 1'b0;
+			if (mnt != 2'b00 && !cmd_start) begin
+				// a new image: read its sector 0 for the RDB (device 0 first)
+				gdev <= !mnt[0];
+				mnt[!mnt[0]] <= 1'b0;
+				geo_ok[!mnt[0]] <= 1'b0; // mounted again while its last image was examined
 				rdb_ok <= 1'b0;
 				sdc_sector <= 32'd0;
-				sdc_rd <= 1'b1;
+				sdc_rd <= mnt[0] ? 2'b01 : 2'b10;
 				sdc_wait <= 1'b1;
 				geo_rd <= 1'b1;
 				state <= ST_GEO;
@@ -374,49 +420,50 @@ always @(posedge clk) begin
 				if (rdb_ok && !sdc_error && rdb_cyl[31:16] == 16'd0 && rdb_cyl[15:0] != 16'd0 &&
 				    rdb_spt[31:8] == 24'd0 && rdb_spt[7:0] != 8'd0 &&
 				    rdb_heads[31:5] == 27'd0 && rdb_heads[4:0] != 5'd0 && rdb_heads[4:0] <= 5'd16) begin
-					id_cyl <= rdb_cyl[15:0];
-					id_heads <= rdb_heads[4:0];
-					id_spt <= rdb_spt[7:0];
-					cur_heads <= rdb_heads[4:0];
-					cur_spt <= rdb_spt[7:0];
-					geo_ok <= 1'b1;
+					id_cyl[gdev] <= rdb_cyl[15:0];
+					id_heads[gdev] <= rdb_heads[4:0];
+					id_spt[gdev] <= rdb_spt[7:0];
+					cur_heads[gdev] <= rdb_heads[4:0];
+					cur_spt[gdev] <= rdb_spt[7:0];
+					geo_ok[gdev] <= 1'b1;
 					state <= ST_IDLE;
 				end
 				else begin
-					id_cyl <= 16'd0;
-					id_heads <= DEF_HEADS;
-					id_spt <= DEF_SPT;
-					cur_heads <= DEF_HEADS;
-					cur_spt <= DEF_SPT;
-					div_rem <= total;
+					geo_cyl <= 16'd0;
+					id_heads[gdev] <= DEF_HEADS;
+					id_spt[gdev] <= DEF_SPT;
+					cur_heads[gdev] <= DEF_HEADS;
+					cur_spt[gdev] <= DEF_SPT;
+					div_rem <= total[gdev];
 					state <= ST_GEO_DIV;
 				end
 			end
 
 		ST_GEO_DIV:
 			// cylinders = sectors / (heads * spt), by subtraction (at most 65535 steps)
-			if (div_rem >= DEF_HEADS * DEF_SPT && id_cyl != 16'hFFFF) begin
+			if (div_rem >= DEF_HEADS * DEF_SPT && geo_cyl != 16'hFFFF) begin
 				div_rem <= div_rem - DEF_HEADS * DEF_SPT;
-				id_cyl <= id_cyl + 16'd1;
+				geo_cyl <= geo_cyl + 16'd1;
 			end
 			else begin
-				geo_ok <= 1'b1;
+				id_cyl[gdev] <= geo_cyl;
+				geo_ok[gdev] <= 1'b1;
 				state <= ST_IDLE;
 			end
 
 		ST_IDENT: begin
 			we <= 1'b1;
 			wa <= ptr;
-			wd <= ident(ptr, id_cyl, id_heads, id_spt, cur_heads, cur_spt, cap);
+			wd <= ident(ptr, id_cyl[sel], id_heads[sel], id_spt[sel], s_heads, s_spt, cap);
 			ptr <= ptr + 8'd1;
 			if (ptr == 8'd255) begin
-				r_status <= ST_DRQ;
+				set_st(ST_DRQ);
 				state <= ST_DRQIN;
 			end
 		end
 
 		ST_CALC1: begin
-			chs_t <= id_mul1(r_cyl_hi, r_cyl_lo, cur_heads, r_head[3:0]);
+			chs_t <= id_mul1(r_cyl_hi, r_cyl_lo, s_heads, r_head[3:0]);
 			state <= ST_CALC2;
 		end
 
@@ -424,29 +471,29 @@ always @(posedge clk) begin
 			if (lba_mode)
 				lba <= { 4'd0, r_head[3:0], r_cyl_hi, r_cyl_lo, r_sector };
 			else
-				lba <= chs_t * cur_spt + r_sector - 32'd1;
+				lba <= chs_t * s_spt + r_sector - 32'd1;
 			state <= ST_CHECK;
 		end
 
 		ST_CHECK:
-			if (lba >= total || (!lba_mode && (r_sector == 8'd0 || r_sector > cur_spt ||
-			                                   { 1'b0, r_head[3:0] } >= cur_heads))) begin
-				r_err <= 8'h10; // IDNF
-				r_status <= ST_ERR;
+			if (lba >= s_total || (!lba_mode && (r_sector == 8'd0 || r_sector > s_spt ||
+			                                     { 1'b0, r_head[3:0] } >= s_heads))) begin
+				set_err(8'h10); // IDNF
+				set_st(ST_ERR);
 				state <= ST_IDLE;
 			end
 			else if (op == OP_VERIFY) begin
-				r_status <= ST_OK;
+				set_st(ST_OK);
 				state <= ST_IDLE;
 			end
 			else if (op == OP_WRITE) begin
 				ptr <= 8'd0;
-				r_status <= ST_DRQ;
+				set_st(ST_DRQ);
 				state <= ST_DRQOUT;
 			end
 			else begin
 				sdc_sector <= lba;
-				sdc_rd <= 1'b1;
+				sdc_rd <= sel ? 2'b10 : 2'b01;
 				sdc_wait <= 1'b1;
 				state <= ST_FETCH;
 			end
@@ -456,12 +503,12 @@ always @(posedge clk) begin
 				sdc_wait <= 1'b0;
 				ptr <= 8'd0;
 				if (sdc_error) begin
-					r_err <= 8'h40; // UNC
-					r_status <= ST_ERR;
+					set_err(8'h40); // UNC
+					set_st(ST_ERR);
 					state <= ST_IDLE;
 				end
 				else begin
-					r_status <= ST_DRQ;
+					set_st(ST_DRQ);
 					state <= ST_DRQIN;
 				end
 			end
@@ -473,14 +520,14 @@ always @(posedge clk) begin
 					if (op == OP_IDENT || left == 9'd1) begin
 						if (op != OP_IDENT)
 							r_count <= r_count - 8'd1;
-						r_status <= ST_OK;
+						set_st(ST_OK);
 						state <= ST_IDLE;
 					end
 					else begin
 						next_sector_regs;
 						lba <= lba + 32'd1;
 						left <= left - 9'd1;
-						r_status <= ST_BSY;
+						set_st(ST_BSY);
 						state <= ST_CHECK;
 					end
 				end
@@ -494,9 +541,9 @@ always @(posedge clk) begin
 				ptr <= ptr + 8'd1;
 				if (ptr == 8'd255) begin
 					sdc_sector <= lba;
-					sdc_wr <= 1'b1;
+					sdc_wr <= sel ? 2'b10 : 2'b01;
 					sdc_wait <= 1'b1;
-					r_status <= ST_BSY;
+					set_st(ST_BSY);
 					state <= ST_STORE;
 				end
 			end
@@ -505,13 +552,13 @@ always @(posedge clk) begin
 			if (sdc_done) begin
 				sdc_wait <= 1'b0;
 				if (sdc_error) begin
-					r_err <= 8'h04; // ABRT
-					r_status <= ST_ERR;
+					set_err(8'h04); // ABRT
+					set_st(ST_ERR);
 					state <= ST_IDLE;
 				end
 				else if (left == 9'd1) begin
 					r_count <= r_count - 8'd1;
-					r_status <= ST_OK;
+					set_st(ST_OK);
 					state <= ST_IDLE;
 				end
 				else begin
@@ -527,60 +574,60 @@ always @(posedge clk) begin
 	end
 
 	// a command (after the state machine: it takes over from a block the host left)
-	if (!reset && !(pend_reset && !sdc_wait) && wr_end && cs0 && a == 3'd7 && here && cmd_ok) begin
-		r_err <= 8'h00;
+	if (cmd_start) begin
+		set_err(8'h00);
 		left <= (r_count == 8'd0) ? 9'd256 : { 1'b0, r_count };
 		casez (din[7:0])
 			8'hEC: begin // IDENTIFY DEVICE
 				op <= OP_IDENT;
 				ptr <= 8'd0;
-				r_status <= ST_BSY;
+				set_st(ST_BSY);
 				state <= ST_IDENT;
 			end
 			8'h20, 8'h21, 8'hC4: begin // READ SECTORS, READ MULTIPLE
 				op <= OP_READ;
-				r_status <= ST_BSY;
+				set_st(ST_BSY);
 				state <= ST_CALC1;
 			end
 			8'h30, 8'h31, 8'hC5: begin // WRITE SECTORS, WRITE MULTIPLE
 				op <= OP_WRITE;
-				r_status <= ST_BSY;
+				set_st(ST_BSY);
 				state <= ST_CALC1;
 			end
 			8'h40, 8'h41: begin // READ VERIFY SECTORS
 				op <= OP_VERIFY;
-				r_status <= ST_BSY;
+				set_st(ST_BSY);
 				state <= ST_CALC1;
 			end
 			8'h91: begin // INITIALIZE DEVICE PARAMETERS
-				cur_spt <= r_count;
-				cur_heads <= { 1'b0, r_head[3:0] } + 5'd1;
-				r_status <= ST_OK;
+				cur_spt[sel] <= r_count;
+				cur_heads[sel] <= { 1'b0, r_head[3:0] } + 5'd1;
+				set_st(ST_OK);
 				state <= ST_IDLE;
 			end
 			8'hC6: begin // SET MULTIPLE MODE: blocks of one sector only
-				r_status <= (r_count[7:1] == 7'd0) ? ST_OK : ST_ERR;
-				r_err <= (r_count[7:1] == 7'd0) ? 8'h00 : 8'h04;
+				set_st((r_count[7:1] == 7'd0) ? ST_OK : ST_ERR);
+				set_err((r_count[7:1] == 7'd0) ? 8'h00 : 8'h04);
 				state <= ST_IDLE;
 			end
 			8'h1?, 8'h7?, 8'hE0, 8'hE1, 8'hE2, 8'hE3, 8'hE6, 8'hE7, 8'hEA, 8'hEF: begin
 				// recalibrate, seek, power modes, flush cache, set features: nothing to do
-				r_status <= ST_OK;
+				set_st(ST_OK);
 				state <= ST_IDLE;
 			end
 			8'hE5: begin // CHECK POWER MODE: active
 				r_count <= 8'hFF;
-				r_status <= ST_OK;
+				set_st(ST_OK);
 				state <= ST_IDLE;
 			end
 			8'h90: begin // EXECUTE DEVICE DIAGNOSTIC: passed
-				r_err <= 8'h01;
-				r_status <= ST_OK;
+				set_err(8'h01);
+				set_st(ST_OK);
 				state <= ST_IDLE;
 			end
 			default: begin
-				r_err <= 8'h04; // ABRT
-				r_status <= ST_ERR;
+				set_err(8'h04); // ABRT
+				set_st(ST_ERR);
 				state <= ST_IDLE;
 			end
 		endcase

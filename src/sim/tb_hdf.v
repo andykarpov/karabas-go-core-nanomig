@@ -14,6 +14,9 @@
 // - INITIALIZE DEVICE PARAMETERS changes the CHS translation; a software reset;
 // - an image without RDB, mounted while the bus is in reset: 16 heads, 63 sectors, cylinders of
 //   its size;
+// - device 1 on a second image (slot 5): its own geometry, data, status and error; device 0
+//   without dev0_en (the CF card is device 0): no device, while device 1 works and dev follows
+//   the DEV bit; an eject of device 1;
 // - all the while the floppy gets its own sectors.
 // Ends with "tb_hdf: N errors".
 
@@ -67,21 +70,24 @@ wire [8:0] sdc_byte_addr;
 wire [7:0] sdc_byte_in_data, hdf_out_data;
 reg [7:0] fdc_rd = 8'd0;
 reg [31:0] fdc_sector = 32'd0;
-wire hdf_rd, hdf_wr;
+wire [1:0] hdf_rd, hdf_wr;
 wire [31:0] hdf_sector;
+reg dev0_en = 1'b1;
+wire hdf_dev, hdf_dev1_here;
 
-wire hdf_own = (sdc_slot == 3'd4);
+wire hdf_own = (sdc_slot[2:1] == 2'b10);
 wire fdc_busy = sdc_busy & ~sdc_slot[2];
 wire fdc_strobe = sdc_byte_in_strobe & ~sdc_slot[2];
-wire [7:0] sdc_rd = { 3'b000, hdf_rd, fdc_rd[3:0] };
-wire [7:0] sdc_wr = { 3'b000, hdf_wr, 4'b0000 };
+wire [7:0] sdc_rd = { 2'b00, hdf_rd, fdc_rd[3:0] };
+wire [7:0] sdc_wr = { 2'b00, hdf_wr, 4'b0000 };
 wire [31:0] sdc_sector = (fdc_rd[3:0] != 4'd0) ? fdc_sector : hdf_sector;
 wire [7:0] sdc_byte_out_data = hdf_own ? hdf_out_data : 8'h00;
 
 hdf_ata hdf(
 	.clk(clk), .reset(reset), .ata_reset(~cf_reset_n | bus_reset),
+	.dev0_en(dev0_en), .dev(hdf_dev), .dev1_here(hdf_dev1_here),
 	.a(cf_a), .cs_n(cf_cs_n), .rd_n(cf_rd_n), .wr_n(cf_wr_n), .din(cf_dout), .dout(hdf_dout),
-	.img_mounted(sdc_img_mounted[4]), .img_size(sdc_img_size),
+	.img_mounted(sdc_img_mounted[5:4]), .img_size(sdc_img_size),
 	.sdc_rd(hdf_rd), .sdc_wr(hdf_wr), .sdc_sector(hdf_sector),
 	.sdc_busy(sdc_busy & hdf_own), .sdc_done(sdc_done & hdf_own), .sdc_error(sdc_error),
 	.sdc_byte_in_strobe(sdc_byte_in_strobe & hdf_own), .sdc_byte_addr(sdc_byte_addr),
@@ -117,6 +123,14 @@ img_sdc #(.TIMEOUT(24'd20000)) img(
 
 localparam DISK_SECTORS = 1200;
 reg [7:0] disk [0:DISK_SECTORS*512-1];
+localparam DISK1_SECTORS = 2100; // device 1: no RDB, 2100 / 1008 = 2 cylinders
+reg [7:0] disk1 [0:DISK1_SECTORS*512-1];
+reg [7:0] devsel = 8'h00; // DEV of the commands: 8'h00 or 8'h10
+
+// a byte of the image of the device the host talks to
+function [7:0] dbyte(input integer i);
+	dbyte = devsel[4] ? disk1[i] : disk[i];
+endfunction
 integer bad_lba = -1;     // the mcu cannot read this sector
 reg wprot = 1'b0;         // the mcu refuses writes
 integer mcu_reads = 0, mcu_writes = 0;
@@ -165,12 +179,13 @@ initial begin : mcu_model
 		if (q_sec && q_op == 8'd1) begin
 			q_sec = 0;
 			#20000; // the answer of the mcu
-			ok = (q_slot == 4) ? (q_lba < DISK_SECTORS && q_lba != bad_lba) : 1'b1;
-			if (q_slot == 4) mcu_reads = mcu_reads + 1;
+			ok = (q_slot == 4) ? (q_lba < DISK_SECTORS && q_lba != bad_lba) :
+			     (q_slot == 5) ? (q_lba < DISK1_SECTORS) : 1'b1;
+			if (q_slot == 4 || q_slot == 5) mcu_reads = mcu_reads + 1;
 			if (ok) begin
 				s = 0;
 				for (k = 0; k < 512; k = k + 1) begin
-					b = (q_slot == 4) ? disk[q_lba * 512 + k] : fdc_byte(q_lba, k);
+					b = (q_slot == 4) ? disk[q_lba * 512 + k] : (q_slot == 5) ? disk1[q_lba * 512 + k] : fdc_byte(q_lba, k);
 					s = s + b;
 					@(posedge clk); img_data_wr <= 1'b1; img_data_addr <= k; img_data <= b;
 					@(posedge clk); img_data_wr <= 1'b0;
@@ -188,9 +203,11 @@ initial begin : mcu_model
 			s = 0;
 			for (k = 0; k < 512; k = k + 1) s = s + q_buf[k];
 			check("write sum", s, q_wsum);
-			if (q_slot != 4) begin $display("%t ERROR write to slot %0d", $time, q_slot); errors = errors + 1; end
-			if (!wprot && q_lba < DISK_SECTORS) begin
-				for (k = 0; k < 512; k = k + 1) disk[q_lba * 512 + k] = q_buf[k];
+			if (q_slot != (devsel[4] ? 5 : 4)) begin $display("%t ERROR write to slot %0d", $time, q_slot); errors = errors + 1; end
+			if (!wprot && q_lba < (q_slot == 5 ? DISK1_SECTORS : DISK_SECTORS)) begin
+				for (k = 0; k < 512; k = k + 1)
+					if (q_slot == 5) disk1[q_lba * 512 + k] = q_buf[k];
+					else disk[q_lba * 512 + k] = q_buf[k];
 				mcu_writes = mcu_writes + 1;
 				mcu_result(8'd1);
 			end
@@ -200,12 +217,13 @@ initial begin : mcu_model
 	end
 end
 
-task mount(input [63:0] size);
+task mount_slot(input [63:0] size, input [7:0] mask);
 	begin
-		@(posedge clk); img_size <= size; img_mounted <= 8'h10;
+		@(posedge clk); img_size <= size; img_mounted <= mask;
 		@(posedge clk); img_mounted <= 8'h00;
 	end
 endtask
+task mount(input [63:0] size); mount_slot(size, 8'h10); endtask
 
 // ---------------- floppy requester (paula_floppy) ----------------
 
@@ -294,7 +312,7 @@ endtask
 
 task set_chs(input [15:0] c, input [3:0] h, input [7:0] sec, input [7:0] n);
 	begin
-		cpu_wrb(TF + 24, 8'hA0 | h);
+		cpu_wrb(TF + 24, 8'hA0 | devsel | h);
 		cpu_wrb(TF + 8, n);
 		cpu_wrb(TF + 12, sec);
 		cpu_wrb(TF + 16, c[7:0]);
@@ -304,7 +322,7 @@ endtask
 
 task set_lba(input [27:0] l, input [7:0] n);
 	begin
-		cpu_wrb(TF + 24, 8'hE0 | l[27:24]);
+		cpu_wrb(TF + 24, 8'hE0 | devsel | l[27:24]);
 		cpu_wrb(TF + 8, n);
 		cpu_wrb(TF + 12, l[7:0]);
 		cpu_wrb(TF + 16, l[15:8]);
@@ -324,7 +342,7 @@ task read_cmd(input [7:0] c, input integer lba, input integer n);
 			check("status at a read block", rdata[15:8], 8'h58);
 			for (w = 0; w < 256; w = w + 1) begin
 				cpu_rd(TF);
-				check("read data", rdata, { disk[(lba + sct) * 512 + 2*w], disk[(lba + sct) * 512 + 2*w + 1] });
+				check("read data", rdata, { dbyte((lba + sct) * 512 + 2*w), dbyte((lba + sct) * 512 + 2*w + 1) });
 			end
 		end
 		#30000;
@@ -357,8 +375,8 @@ task check_written(input integer lba, input integer n, input [7:0] seed);
 	begin
 		for (sct = 0; sct < n; sct = sct + 1)
 			for (w = 0; w < 256; w = w + 1) begin
-				check("written byte even", disk[(lba + sct) * 512 + 2*w], seed + sct[7:0]);
-				check("written byte odd", disk[(lba + sct) * 512 + 2*w + 1], w[7:0]);
+				check("written byte even", dbyte((lba + sct) * 512 + 2*w), seed + sct[7:0]);
+				check("written byte odd", dbyte((lba + sct) * 512 + 2*w + 1), w[7:0]);
 			end
 	end
 endtask
@@ -387,6 +405,7 @@ initial begin
 	// the image: an RDB with 16 cylinders, 2 heads, 32 sectors (1024 sectors) in a file of 1200
 	for (i = 0; i < DISK_SECTORS * 512; i = i + 1) disk[i] = (i / 512) * 13 + (i % 512) * 7;
 	for (i = 0; i < 512; i = i + 1) disk[i] = 8'h00;
+	for (i = 0; i < DISK1_SECTORS * 512; i = i + 1) disk1[i] = (i / 512) * 29 + (i % 512) * 3 + 5;
 	disk[0] = "R"; disk[1] = "D"; disk[2] = "S"; disk[3] = "K";
 	disk[67] = 8'd16; disk[71] = 8'd32; disk[75] = 8'd2;
 
@@ -551,8 +570,8 @@ initial begin
 	bus_reset = 1'b1;
 	mount(DISK_SECTORS * 512);
 	i = 0;
-	while (hdf.geo_ok !== 1'b1 && i < 200000) begin @(posedge clk); i = i + 1; end
-	check("geometry of a mount during a bus reset", hdf.geo_ok, 1'b1);
+	while (hdf.geo_ok[0] !== 1'b1 && i < 200000) begin @(posedge clk); i = i + 1; end
+	check("geometry of a mount during a bus reset", hdf.geo_ok[0], 1'b1);
 	bus_reset = 1'b0;
 	wait_ready;
 	nirq = 0;
@@ -569,6 +588,79 @@ initial begin
 	// c 0 h 15 s 63 is lba 15*63+62 = 1007
 	set_chs(0, 15, 63, 1);
 	read_cmd(8'h20, 1007, 1);
+
+	// ---- device 1: a second image (slot 5) ----
+	check("dev1_here without image", hdf_dev1_here, 1'b0);
+	mount_slot(DISK1_SECTORS * 512, 8'h20);
+	devsel = 8'h10;
+	cpu_wrb(TF + 24, 8'hB0);
+	check("dev after selecting device 1", hdf_dev, 1'b1);
+	repeat (20) @(posedge clk);
+	cpu_rd(ALT); check("status of device 1 while mounting", rdata[15:8], 8'h80);
+	wait_ready;
+	check("status of device 1 after mount", rdata[15:8], 8'h50);
+	check("dev1_here", hdf_dev1_here, 1'b1);
+	nirq = 0;
+	cpu_wrb(TF + 28, 8'hEC);
+	wait_irq(1);
+	for (w = 0; w < 256; w = w + 1) begin
+		cpu_rd(TF);
+		ident[w] = { rdata[7:0], rdata[15:8] };
+	end
+	check("device 1 cylinders", ident[1], 2);
+	check("device 1 heads", ident[3], 16);
+	check("device 1 sectors", ident[6], 63);
+	check("device 1 lba sectors", { ident[61], ident[60] }, DISK1_SECTORS);
+	// past the end of image 0, inside image 1
+	set_lba(1500, 2);
+	read_cmd(8'h20, 1500, 2);
+	check_tf(8'd0, 8'd221, 16'd5, 8'hF0); // 1501 = 0x5DD
+	// c 1 h 2 s 3 (16 / 63): lba (16 + 2) * 63 + 2 = 1136
+	set_chs(1, 2, 3, 1);
+	read_cmd(8'h20, 1136, 1);
+	n0 = mcu_writes;
+	set_lba(2000, 2);
+	write_cmd(8'h30, 2, 8'h20);
+	check_written(2000, 2, 8'h20);
+	check("device 1 writes", mcu_writes - n0, 2);
+	// an error of device 1 is not one of device 0
+	set_lba(DISK1_SECTORS, 1);
+	nirq = 0;
+	cpu_wrb(TF + 28, 8'h20);
+	wait_irq(1);
+	cpu_rd(TF + 28); check("device 1 past the end", rdata[15:8], 8'h51);
+	devsel = 8'h00;
+	cpu_wrb(TF + 24, 8'hA0);
+	check("dev after selecting device 0", hdf_dev, 1'b0);
+	cpu_rd(TF + 28); check("status of device 0 beside device 1", rdata[15:8], 8'h50);
+	cpu_rd(TF + 4); check("error of device 0 beside device 1", rdata[15:8], 8'h00);
+	set_lba(62, 1);
+	read_cmd(8'h20, 62, 1);
+
+	// device 0 is the CF card (dev0_en = 0): no device here, device 1 still works
+	dev0_en = 1'b0;
+	cpu_wrb(TF + 24, 8'hA0);
+	cpu_rd(TF + 28); check("status of device 0 without dev0_en", rdata[15:8], 8'h00);
+	nirq = 0;
+	cpu_wrb(TF + 28, 8'hEC); // not for this one
+	#50000;
+	check("no interrupt without dev0_en", nirq, 0);
+	devsel = 8'h10;
+	set_lba(7, 1);
+	check("dev follows DEV without device 0", hdf_dev, 1'b1);
+	read_cmd(8'h20, 7, 1);
+	devsel = 8'h00;
+	cpu_wrb(TF + 24, 8'hA0);
+	check("dev back to 0", hdf_dev, 1'b0);
+	dev0_en = 1'b1;
+
+	// eject device 1
+	mount_slot(64'd0, 8'h20);
+	cpu_wrb(TF + 24, 8'hB0);
+	repeat (5) @(posedge clk);
+	cpu_rd(TF + 28); check("status of device 1 after eject", rdata[15:8], 8'h00);
+	check("dev1_here after eject", hdf_dev1_here, 1'b0);
+	cpu_wrb(TF + 24, 8'hA0);
 
 	fdc_on = 1'b0;
 	wait (fdc_state == 0);

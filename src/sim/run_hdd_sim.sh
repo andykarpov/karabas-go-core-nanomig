@@ -1,12 +1,14 @@
 #!/bin/bash
 # Simulate the Mini G top with ISim (Xilinx ISE 14.7): the CF card slot (tb_hdd.v).
 # Usage: src/sim/run_hdd_sim.sh [run time, default 6 ms] (about a minute)
-#        src/sim/run_hdd_sim.sh hdf [run time, default 12 ms]: HDD = HDF, the image on the file mounter
+#        src/sim/run_hdd_sim.sh hdf [run time, default 12 ms]: HDD0 = HDF0, the image on the file mounter
+#        src/sim/run_hdd_sim.sh hdf1 [run time, default 12 ms]: HDD0 = CF card, the program uses HDF1 (device 1)
 # Needs src/roms/kick13.rom (512 KB).
 set -e
 HDF=0
 if [ "$1" = "hdf" ]; then HDF=1; shift; fi
-if [ $HDF = 1 ]; then TIME="${1:-12 ms}"; else TIME="${1:-6 ms}"; fi
+if [ "$1" = "hdf1" ]; then HDF=2; shift; fi
+if [ $HDF != 0 ]; then TIME="${1:-12 ms}"; else TIME="${1:-6 ms}"; fi
 set --
 source /opt/Xilinx/14.7/ISE_DS/settings64.sh > /dev/null
 
