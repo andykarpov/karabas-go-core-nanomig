@@ -64,7 +64,9 @@
 // 2010-04-12 - implemented work-around for dsksync interrupt request
 // 2010-08-14 - set BYTEREADY of DSKBYTR (required by Kick Off 2 loader)
 
-module paula_floppy
+module paula_floppy #(
+	parameter FLOPPY_EXT = 0 // karabas: 1 = physical floppy drives (paula_floppy_ext.v, Karabas Go); 0 = none, the module is not built
+)
 (
 	// system bus interface
 	input		  clk, // bus clock
@@ -113,7 +115,14 @@ module paula_floppy
 	input		  sdc_byte_in_strobe, // byte from sd card is ready
 	input [8:0]	  sdc_byte_addr, // index of sd card data byte within sector
 	input [7:0]	  sdc_byte_in_data, // sd card to cpu data byte
-	output reg [7:0]  sdc_byte_out_data // cpu to sd card data byte
+	output reg [7:0]  sdc_byte_out_data, // cpu to sd card data byte
+
+	// karabas: physical drives (paula_floppy_ext.v, the read data through MiSTerFloppyPLL)
+	input [1:0]	  precomp, // ADKCON PRECOMP
+	input [7:0]	  floppy_ext, // DFn: [2n+1:2n] = 0 image, 1 drive DS0, 2 drive DS1
+	input [3:0]	  floppy_ext_chg, // one clock: DFn was chosen again (disk change)
+	input [3:0]	  fdd_in, // { rdata, wprt, tr00, index }, high = active
+	output [7:0]	  fdd_out // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
 );
 
 //register names and addresses
@@ -177,6 +186,109 @@ reg  [3:0] motor_on;       // drive motor on
 
 //decoded commands
 reg        cmd_fdd;			//HPS accesses floppy drive buffer
+
+//-----------------------------------------------------------------------------------------------//
+// karabas: physical drives (Karabas Go): the drive signals in paula_floppy_ext, the read data
+// separator and the write serialiser of RobSmithDev's Minimig (MiSTerFloppyPLL). The words go
+// through the same fifo as those of an image.
+
+wire [3:0]  ext_drv;		// DFn is a physical drive
+wire        ext_sel;		// the selected drive is a physical one
+wire [3:0]  ext_change_v, ext_ready_v;
+wire        ext_wprot, ext_track0, ext_index, ext_dskrd;
+wire        ext_wg, ext_wd;	// write gate / data of the PLL, low = active
+wire [15:0] ext_rx;		// a word read
+wire        ext_wr;		// ext_rx is new (one clk7_en cycle)
+wire        ext_rd;		// the PLL took fifo_out to write it
+wire        ext_rd_del;		// the PLL has written its last word
+wire        ext_sync;		// ext_rx is the sync word
+wire [7:0]  ext_byte;		// DSKBYTR data
+wire        ext_byte_rdy, ext_sync_now;
+reg         ext_byte_clr = 1'b0;
+
+generate
+if (FLOPPY_EXT) begin : paula_floppy_ext_on
+
+paula_floppy_ext ext
+(
+	.clk(clk),
+	.clk7_en(clk7_en),
+	.reset(reset),
+	._sel(_sel),
+	.motor_on(motor_on),
+	._step(_step),
+	.direc(direc),
+	.side(side),
+	.map(floppy_ext),
+	.chg(floppy_ext_chg),
+	.fdd_in(fdd_in),
+	._write_gate(ext_wg),
+	._write_data(ext_wd),
+	.fdd_out(fdd_out),
+	.ext_drv(ext_drv),
+	.ext_sel(ext_sel),
+	._change_v(ext_change_v),
+	._ready_v(ext_ready_v),
+	._wprot_x(ext_wprot),
+	._track0_x(ext_track0),
+	.index_x(ext_index),
+	._dskrd(ext_dskrd)
+);
+
+MiSTerFloppyPLL pll
+(
+	.clk(clk),
+	.clk7_en(clk7_en),
+	.reset(reset),
+	.trackrd(1'b1),			// words all the time, as RobSmithDev's Minimig for a real drive
+	._dskrd(ext_dskrd),
+	.selected(ext_sel & ~trackwr),
+	.trackwr(trackwr & ext_sel),
+	.precomp(precomp),
+	.fifo_empty(fifo_empty),
+	.ext_floppy_rx(ext_rx),
+	.ext_floppy_wr(ext_wr),
+	.ext_floppy_tx(fifo_out),
+	.ext_floppy_rd(ext_rd),
+	.ext_floppy_rd_del(ext_rd_del),
+	.ext_floppy_sync(ext_sync),
+	.diskByte(ext_byte),
+	.diskByteReady(ext_byte_rdy),
+	.resetDiskByteReady(ext_byte_clr),
+	.syncWordNOW(ext_sync_now),
+	.wordsyncEnabled(wordsync),
+	.ext_floppy_syncword(dsksync),
+	.bitdetected(),
+	.pause(1'b0),
+	._writeData(ext_wd),
+	._writeGate(ext_wg)
+);
+
+end else begin : paula_floppy_ext_off
+
+// no physical drives: the ext_* signals are constants and the muxes below fold away
+assign fdd_out = 8'd0;
+assign ext_drv = 4'd0;
+assign ext_sel = 1'b0;
+assign ext_change_v = 4'b1111;
+assign ext_ready_v = 4'b1111;
+assign ext_wprot = 1'b1;
+assign ext_track0 = 1'b1;
+assign ext_index = 1'b0;
+assign ext_dskrd = 1'b1;
+assign ext_wg = 1'b1;
+assign ext_wd = 1'b1;
+assign ext_rx = 16'd0;
+assign ext_wr = 1'b0;
+assign ext_rd = 1'b0;
+assign ext_rd_del = 1'b0;
+assign ext_sync = 1'b0;
+assign ext_byte = 8'd0;
+assign ext_byte_rdy = 1'b0;
+assign ext_sync_now = 1'b0;
+
+end
+endgenerate
 
 //-----------------------------------------------------------------------------------------------//
 
@@ -272,7 +384,7 @@ always @(posedge clk) begin : paula_floppy_blk245
       case(fd_dma_buf_wr_state)
 	4'd0: begin
 	   // DMA read detected, read data from SD card into buffer
-	   if(dma_active && !sdc_busy && !lenzero && !dsklen[14]) begin	     
+	   if(dma_active && !sdc_busy && !lenzero && !dsklen[14] && !ext_sel) begin // karabas: not for a physical drive	     
 	      $display("paula_floppy.v: DMA read, lenzero = %0d, dsklen = %0d/%0d/%0d", 
 		       lenzero, dsklen[15], dsklen[14], dsklen[13:0]);
 	      
@@ -300,7 +412,7 @@ always @(posedge clk) begin : paula_floppy_blk245
 	   // karabas: a write goes on after the dma length ran out (lenzero): the sectors still in
 	   // the fifo have to be written too. With a slow sd card (the mcu) the fifo holds more than
 	   // the gap at the end of the track, and the dma ends (DSKBLK) only with an empty fifo.
-	   if(dmaen && enable && dsklen[14]) begin
+	   if(dmaen && enable && dsklen[14] && !ext_sel) begin // karabas: not for a physical drive
 	      $display("paula_floppy.v: DMA write, lenzero = %0d, dsklen = %0d/%0d/%0d", 
 		       lenzero, dsklen[15], dsklen[14], dsklen[13:0]);
 
@@ -588,7 +700,7 @@ always @(posedge clk) begin
 end
     
 // disk index pulses output
-assign index = |(~_sel & motor_on) & ~|rpm_pulse_cnt & sof;
+assign index = ext_sel ? ext_index : |(~_sel & motor_on) & ~|rpm_pulse_cnt & sof; // karabas: physical drive
 	
 //--------------------------------------------------------------------------------------
 //data out multiplexer
@@ -674,11 +786,12 @@ always @(posedge clk) begin
 end
 
 //_ready,_track0 and _change signals
-assign _change = &(_sel | _disk_change);
+// karabas: a physical drive has its own signals
+assign _change = &(_sel | (ext_drv & ext_change_v) | (~ext_drv & _disk_change));
 
-assign _wprot = &(_sel | disk_writable);
+assign _wprot = &(_sel | (ext_drv & {4{ext_wprot}}) | (~ext_drv & disk_writable));
 
-assign  _track0 =&(_selx | _dsktrack0);
+assign  _track0 = ext_sel ? ext_track0 : &(_selx | _dsktrack0);
 
 //track control
 assign track = {dsktrack[sel],~side};
@@ -703,15 +816,23 @@ assign dsktracklast = dsktrack[sel]==82;
 // drive _ready signal control
 // Amiga DD drive activates _ready whenever _sel is active and motor is off
 // or whenever _sel is active, motor is on and there is a disk inserted (not implemented - _ready is active when _sel is active)
-assign _ready   = (_sel[3] | ~(drives[1] & drives[0])) 
-        & (_sel[2] | ~drives[1]) 
-        & (_sel[1] | ~(drives[1] | drives[0])) 
-        & (_sel[0]);
+// karabas: the same per drive, a physical drive has its own
+wire [3:0] _ready_adf = { ~(drives[1] & drives[0]), ~drives[1], ~(drives[1] | drives[0]), 1'b0 };
+assign _ready = &(_sel | (ext_drv & ext_ready_v) | (~ext_drv & _ready_adf));
 
 //--------------------------------------------------------------------------------------
 
 //disk data byte and status read
-assign dskbytr = reg_address_in[8:1]==DSKBYTR[8:1] ? {1'b1,(trackrd|trackwr),dsklen[14],5'b1_0000,8'h00} : 16'h00_00;
+// karabas: a physical drive has the real DSKBYT / WORDEQUAL / data byte (as RobSmithDev's Minimig)
+assign dskbytr = reg_address_in[8:1]!=DSKBYTR[8:1] ? 16'h00_00 :
+	ext_sel ? {ext_byte_rdy,(trackrd|trackwr),dsklen[14],ext_sync_now,4'b0000,ext_byte} :
+	{1'b1,(trackrd|trackwr),dsklen[14],5'b1_0000,8'h00};
+
+// karabas: DSKBYT is cleared by a read of DSKBYTR
+always @(posedge clk) begin
+  if (clk7_en)
+    ext_byte_clr <= (reg_address_in[8:1]==DSKBYTR[8:1]) && ext_byte_rdy;
+end
 
 //disk sync register
 always @(posedge clk) begin
@@ -775,16 +896,18 @@ assign busrd = (reg_address_in[8:1]==DSKDATR[8:1]);
 assign buswr = (reg_address_in[8:1]==DSKDAT[8:1]);
 
 //fifo data input multiplexer
-assign fifo_in[15:0] = trackrd ? floppy_data : data_in;
+assign fifo_in[15:0] = trackrd ? (ext_sel ? ext_rx : floppy_data) : data_in; // karabas: physical drive
 
 // data word transfer strobe. In state 3 the state machine is transferring payload
 // into the sd card buffer and thus waits for sd card not being busy and for the
 // buffer write engine to be ready to receive data
 wire  buffer_write_allowed = (cpu_wr_state != 3) || ((fd_dma_buf_wr_state == 4'd6) && !sdc_busy);
-wire	stbdat = trackwr & !fifo_empty & buffer_write_allowed;
+wire	stbdat = trackwr & !fifo_empty & buffer_write_allowed & !ext_sel; // karabas: not for a physical drive
 
 //fifo write control
-assign fifo_wr = (trackrdok && fifo_reading_sector & !fifo_full & ~lenzero) | (buswr & dmaon);
+// karabas: the words of a physical drive come from the PLL
+assign fifo_wr = ext_sel ? (trackrdok & ext_wr & !fifo_full & ~lenzero) | (buswr & dmaon) :
+                 (trackrdok && fifo_reading_sector & !fifo_full & ~lenzero) | (buswr & dmaon);
 
 reg [15:0] wr_sector_csum;   
 wire	   fifo_out_sync = fifo_out == dsksync[15:0];   
@@ -925,13 +1048,19 @@ always @(posedge clk)
 
 //fifo read control, on write only run in state 3 if the sd card is not busy
 //writing the previous sector
-assign fifo_rd = (busrd & dmaon) | stbdat;
+// karabas: the PLL writes the words to a physical drive
+assign fifo_rd = (busrd & dmaon) | (ext_sel ? ext_rd & !fifo_empty : stbdat);
 
 //DSKSYNC interrupt
 wire sync_match;
 assign sync_match = dsksync[15:0]==floppy_data && fifo_reading_sector && trackrd;
 
-assign syncint = sync_match | ~dmaen & |(~_sel & motor_on & disk_present) & sof;
+// karabas: a physical drive: the sync word in the bit stream
+reg ext_sync_now_d;
+always @(posedge clk)
+  if (clk7_en) ext_sync_now_d <= ext_sync_now;
+assign syncint = ext_sel ? ext_sync_now & ~ext_sync_now_d :
+                 sync_match | ~dmaen & |(~_sel & motor_on & disk_present) & sof;
 
 //track read enable / wait for syncword logic
 always @(posedge clk) begin
@@ -939,7 +1068,7 @@ always @(posedge clk) begin
   	if (!trackrd)//reset
   		trackrdok <= 0;
   	else//wordsync is enabled, wait with reading untill syncword is found
-  		trackrdok <= ~wordsync | sync_match | trackrdok;
+  		trackrdok <= ~wordsync | (ext_sel ? ext_wr & ext_sync : sync_match) | trackrdok; // karabas: physical drive
   end
 end
 
@@ -1035,7 +1164,7 @@ always @(*) begin
 			blckint=0;
 			if (!dmaen || !enable)
 				nextstate = DISKDMA_IDLE;
-			else if (lenzero && fifo_empty && !fifo_wr_del)//complete dma cycle done
+			else if (lenzero && fifo_empty && !(ext_sel ? ext_rd_del : fifo_wr_del))//complete dma cycle done (karabas: physical drive: the PLL took the last word)
 				nextstate = DISKDMA_INT;
 			else
 				nextstate = DISKDMA_ACTIVE;			

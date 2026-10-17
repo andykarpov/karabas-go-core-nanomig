@@ -17,6 +17,8 @@ PY
 cd build/floppy
 cat > tb.prj <<PRJ
 verilog work "../../../rtl/minimig-aga/paula_floppy_fifo.v"
+verilog work "../../../rtl/minimig-aga/MiSTerFloppyPLL.v"
+verilog work "../../../rtl/minimig-aga/paula_floppy_ext.v"
 verilog work "../../../rtl/minimig-aga/paula_floppy.v"
 verilog work "../../tb_floppy.v"
 PRJ

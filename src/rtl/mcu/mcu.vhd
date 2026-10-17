@@ -118,6 +118,8 @@ entity mcu is
 	 IMG_Q_WR      : in std_logic := '0'; -- a frame to the mcu (request, write data), held until IMG_Q_ACK
 	 IMG_Q_DI      : in std_logic_vector(23 downto 0) := (others => '0');
 	 IMG_Q_ACK     : buffer std_logic := '0';
+	 IMG_PHYS_WR   : out std_logic := '0'; -- one clock: a slot was set to a physical drive (CMD_IMG_PHYS)
+	 IMG_PHYS      : out std_logic_vector(15 downto 0) := (others => '0'); -- slot & drive (0 none, 1 DS0, 2 DS1)
 
 	 -- busy
 	 BUSY: buffer std_logic := '1'
@@ -146,6 +148,7 @@ architecture rtl of mcu is
 	constant CMD_IMG_SEC      : std_logic_vector(7 downto 0) := x"43";
 	constant CMD_IMG_BUF_BANK : std_logic_vector(7 downto 0) := x"44";
 	constant CMD_IMG_BUF_DATA : std_logic_vector(7 downto 0) := x"45";
+	constant CMD_IMG_PHYS     : std_logic_vector(7 downto 0) := x"46";
 	constant CMD_IOCTL_BANK   : std_logic_vector(7 downto 0) := x"52";
 	constant CMD_IOCTL_DATA   : std_logic_vector(7 downto 0) := x"53";
 	constant CMD_IOCTL_STATE  : std_logic_vector(7 downto 0) := x"55";
@@ -314,6 +317,7 @@ begin
 	begin
 		if (rising_edge(CLK)) then
 			IMG_MOUNTED <= (others => '0');
+			IMG_PHYS_WR <= '0';
 			IMG_DATA_WR <= '0';
 			IMG_RESULT_WR <= '0';
 			ioctl_wr <= '0';
@@ -470,6 +474,9 @@ begin
 								IMG_MOUNTED(to_integer(unsigned(img_slot(2 downto 0)))) <= '1';
 							when others => null;
 						end case;
+					when CMD_IMG_PHYS => -- a physical drive for the slot (after its size 0 frames)
+						IMG_PHYS <= spi_do(15 downto 0);
+						IMG_PHYS_WR <= '1';
 					when CMD_IMG_LBA => -- mcu -> fpga: the sum of the sector read, before the result
 						case spi_do(15 downto 8) is
 							when x"00" => IMG_SUM(7 downto 0) <= spi_do(7 downto 0);

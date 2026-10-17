@@ -47,7 +47,8 @@ paula_floppy dut(
 	.sdc_image_mounted(mounted), .sdc_image_size(32'd901120),
 	.sdc_rd(sdc_rd), .sdc_wr(sdc_wr), .sdc_sector(sdc_sector), .sdc_busy(sdc_busy), .sdc_done(sdc_done),
 	.sdc_byte_in_strobe(1'b0), .sdc_byte_addr(sdc_addr), .sdc_byte_in_data(8'h00),
-	.sdc_byte_out_data(sdc_out)
+	.sdc_byte_out_data(sdc_out),
+	.precomp(2'b00), .floppy_ext(8'd0), .floppy_ext_chg(4'd0), .fdd_in(4'd0), .fdd_out()
 );
 
 reg [7:0] adf [0:22527];        // tracks 0..3

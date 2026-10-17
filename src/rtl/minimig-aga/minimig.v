@@ -146,7 +146,9 @@
 // SB:
 // 2012-03-23 - fixed sprite enable signal (coppermaster demo)
 
-module minimig
+module minimig #(
+	parameter FLOPPY_EXT = 0 // karabas: 1 = physical floppy drives (paula_floppy_ext.v, Karabas Go); 0 = none, the module is not built
+)
 (
 	//m68k pins
 	input [23:1]  cpu_address, // m68k address bus
@@ -215,6 +217,11 @@ module minimig
 	input [7:0]   memory_config,
 	input [5:0]   chipset_config,
 	input [3:0]   floppy_config,
+	// karabas: physical floppy drives (paula_floppy_ext.v)
+	input [7:0]   floppy_ext,
+	input [3:0]   floppy_ext_chg,
+	input [3:0]   fdd_in,
+	output [7:0]  fdd_out,
 	input [5:0]   ide_config,
 
         // Interface MiSTeryNano sd card interface. This very simple connection allows the core
@@ -500,7 +507,7 @@ agnus AGNUS1
 );
 
 //instantiate paula
-paula PAULA1
+paula #(.FLOPPY_EXT(FLOPPY_EXT)) PAULA1
 (
 	.clk(clk),
 	.clk7_en (clk7_en),
@@ -554,7 +561,11 @@ paula PAULA1
 	.sdc_byte_out_data(sdc_byte_out_data),
 
 	.floppy_wrprot(floppy_config[1]),
-	.floppy_drives(floppy_config[3:2])
+	.floppy_drives(floppy_config[3:2]),
+	.floppy_ext(floppy_ext),
+	.floppy_ext_chg(floppy_ext_chg),
+	.fdd_in(fdd_in),
+	.fdd_out(fdd_out)
 );
 
 wire [2:0] cachecfg_pre;

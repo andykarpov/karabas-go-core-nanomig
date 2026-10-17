@@ -1,7 +1,7 @@
 {
     "id": "nanomig",
     "name": "Nanomig",
-    "build": "26101703",
+    "build": "26101704",
     "bitstream": "karabas_go.bin",
     "visible": true,
     "type": "osd",
@@ -10,10 +10,10 @@
     "rtc_mode": 3,
     "roms": [],
     "osd": [
-        {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1"},
-        {"type": "F", "name": "DF1", "slot": 1, "extensions": ".adf", "hotkey": "Menu+F2"},
-        {"type": "F", "name": "DF2", "slot": 2, "extensions": ".adf", "hotkey": "Menu+F3"},
-        {"type": "F", "name": "DF3", "slot": 3, "extensions": ".adf", "hotkey": "Menu+F4"},
+        {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1", "physical": 1},
+        {"type": "F", "name": "DF1", "slot": 1, "extensions": ".adf", "hotkey": "Menu+F2", "physical": 1},
+        {"type": "F", "name": "DF2", "slot": 2, "extensions": ".adf", "hotkey": "Menu+F3", "physical": 1},
+        {"type": "F", "name": "DF3", "slot": 3, "extensions": ".adf", "hotkey": "Menu+F4", "physical": 1},
         {"type": "S", "name": "HDD0", "options": ["Off", "CF card", "HDF0"], "default": 1},
         {"type": "F", "name": "HDF0", "slot": 4, "extensions": ".hdf", "hotkey": "Menu+F5"},
         {"type": "F", "name": "HDF1", "slot": 5, "extensions": ".hdf", "hotkey": "Menu+F6"},

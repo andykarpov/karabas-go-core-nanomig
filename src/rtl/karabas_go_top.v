@@ -16,7 +16,8 @@
 --   MCU link: MCU_IO is 4 bits and the burst lines are swapped against the Mini boards:
 --     [0] burst ready (N9), [1] burst cs_n (M11). MCU_SCK is not on a global clock pin, so the
 --     bursts run at the normal link clock (BURST_MAX_MHZ = 0).
---   Floppy connector, beeper, midi, esp: not used.
+--   Floppy connector: physical drives DS0 / DS1 (minimig-aga/paula_floppy_ext.v), FPGA pins high =
+--     active (74LVC06 / 74LVC14 inverters to the connector). Beeper, midi, esp: not used.
 --
 -- Memory: the two 2Mx8 SRAM chips are used as one 2Mx16 SRAM (4 MB), like the async SRAM
 -- of the original Minimig board:
@@ -134,14 +135,17 @@ assign ESP_BOOT_N = 1'bz;
 assign SD_CS_N = 1'b1;
 assign SD_DI = 1'b1;
 assign SD_CLK = 1'b0;
-// floppy connector: released, as profi does without its fdc (ENABLE_FDD = 0)
-assign FDC_DRIVE = 2'bzz;
-assign FDC_MOTOR = 1'bz;
-assign FDC_DIR = 1'bz;
-assign FDC_STEP = 1'bz;
-assign FDC_WDATA = 1'bz;
-assign FDC_WGATE = 1'bz;
-assign FDC_SIDE_N = 1'bz;
+// floppy connector: physical drives of paula_floppy_ext.v (high = active; the board inverts them:
+// open drain 74LVC06 to the connector, SIDE through a 74LVC14, the inputs through 74LVC14).
+// DS0 = pin 10, DS1 = pin 12, MOTOR = pin 16 (one for both drives); pins 14 and 34 are not wired.
+wire [7:0] fdd_out;            // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
+assign FDC_DRIVE = fdd_out[1:0];
+assign FDC_MOTOR = fdd_out[2];
+assign FDC_DIR = fdd_out[3];
+assign FDC_STEP = fdd_out[4];
+assign FDC_SIDE_N = fdd_out[5];
+assign FDC_WGATE = fdd_out[6];
+assign FDC_WDATA = fdd_out[7];
 // FT812 off the VGA bus (FT_OE_N = 1), its spi idle
 assign FT_SPI_CS_N = 1'b1;
 assign FT_SPI_SCK = 1'b0;
@@ -214,6 +218,8 @@ wire dvi_only;
 wire [7:0] kb_status, kb_dat0, kb_dat1, kb_dat2, kb_dat3, kb_dat4, kb_dat5;
 wire [7:0] ms_x, ms_y;
 wire [7:0] img_mounted;
+wire img_phys_wr;
+wire [15:0] img_phys;
 wire [63:0] img_size;
 wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
 wire [8:0] img_data_addr;
@@ -312,6 +318,8 @@ mcu #(.BURST_MAX_MHZ(0)) mcu(
 	.IMG_Q_WR(img_q_wr),
 	.IMG_Q_DI(img_q_di),
 	.IMG_Q_ACK(img_q_ack),
+	.IMG_PHYS_WR(img_phys_wr),
+	.IMG_PHYS(img_phys),
 
 	.HWID(),
 	.DVI_ONLY(dvi_only),
@@ -455,17 +463,37 @@ wire [5:0] ide_config = { 5'b00000, sw_hdd != 2'd0 || hdf_dev1_here };
 wire cf_sel = (sw_hdd == 2'd1);
 wire cf_data = cf_sel && !hdf_dev;
 
-// the floppy drives the Amiga finds: DF0 up to the highest DF with an image, taken while the Amiga
-// is in reset (it looks for the drives once, at its start)
+// physical floppy drives: DFn on DS0 / DS1 of the floppy connector (CMD_IMG_PHYS of the firmware,
+// after the size 0 frames of the slot). The size frames of a slot (eject, an image) take it back.
+// Each CMD_IMG_PHYS is a disk change for the Amiga (floppy_ext_chg).
+reg [7:0] floppy_ext = 8'd0;   // DFn: [2n+1:2n] = 0 image, 1 DS0, 2 DS1
+reg [3:0] floppy_ext_chg = 4'd0;
+always @(posedge clk_sys) begin : floppy_ext_blk
+	integer n;
+	floppy_ext_chg <= 4'd0;
+	for (n = 0; n < 4; n = n + 1) begin
+		if (sdc_img_mounted[n])
+			floppy_ext[2*n +: 2] <= 2'd0;
+		if (img_phys_wr && img_phys[15:8] == n) begin
+			floppy_ext[2*n +: 2] <= (img_phys[1:0] == 2'd3) ? 2'd0 : img_phys[1:0];
+			floppy_ext_chg[n] <= 1'b1;
+		end
+	end
+end
+wire [3:0] df_ext = { floppy_ext[7:6] != 2'd0, floppy_ext[5:4] != 2'd0, floppy_ext[3:2] != 2'd0, floppy_ext[1:0] != 2'd0 };
+
+// the floppy drives the Amiga finds: DF0 up to the highest DF with an image or a physical drive,
+// taken while the Amiga is in reset (it looks for the drives once, at its start)
 reg [3:1] df_img = 3'b000;
 reg [1:0] drives = 2'd0;       // drives - 1
+wire [3:1] df_on = df_img | df_ext[3:1];
 always @(posedge clk_sys) begin : drives_blk
 	integer n;
 	for (n = 1; n < 4; n = n + 1)
 		if (sdc_img_mounted[n])
 			df_img[n] <= (sdc_img_size != 64'd0);
 	if (cpu_reset)
-		drives <= df_img[3] ? 2'd3 : df_img[2] ? 2'd2 : df_img[1] ? 2'd1 : 2'd0;
+		drives <= df_on[3] ? 2'd3 : df_on[2] ? 2'd2 : df_on[1] ? 2'd1 : 2'd0;
 end
 
 // img_sdc serves one sdc index at a time; each requester takes busy, done and the bytes of its own
@@ -477,7 +505,7 @@ assign sdc_wr = { 2'b00, hdf_wr, fdc_wr[3:0] };
 assign sdc_sector = (fdc_rd[3:0] != 4'd0 || fdc_wr[3:0] != 4'd0) ? fdc_sector : hdf_sector; // the lowest index first, as img_sdc
 assign sdc_byte_out_data = hdf_own ? hdf_out_data : fdc_out_data;
 
-nanomig nanomig(
+nanomig #(.FLOPPY_EXT(1)) nanomig(
 	.clk_sys(clk_sys),
 	.reset(cpu_reset),
 	.por(areset),
@@ -500,6 +528,10 @@ nanomig nanomig(
 	.fastram_config(fastram_config),
 	.chipset_config(chipset_config),
 	.floppy_config(floppy_config),
+	.floppy_ext(floppy_ext),
+	.floppy_ext_chg(floppy_ext_chg),
+	.fdd_in({ FDC_RDATA, FDC_WPRT, FDC_TR00, FDC_INDEX }),
+	.fdd_out(fdd_out),
 	.video_config(video_config),
 	.ide_config(ide_config),
 
