@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// The CF card slot through the whole Mini G top: HDD = CF card (soft switch 8), and a 68000
+// The CF card slot through the whole Mini G top: HDD = CF card (soft switch 12), and a 68000
 // program in place of the Kickstart code at $FC00D2 (in the SRAM model) talks to the Gayle IDE
 // registers: IDENTIFY, waits for the Gayle interrupt, reads the 256 words into slow ram, then
 // writes them back to LBA 3 with WRITE SECTORS (waits for DRQ on the alternate status, then for
@@ -465,7 +465,7 @@ always @(posedge dut.clk_sys)
 integer w;
 initial begin
 	#200000; // pll lock
-	frame(8'h05, 8'h08, 8'h01);   // HDD = CF card
+	frame(8'h05, 8'h0C, 8'h01);   // HDD = CF card (osd item 12)
 	frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 	$display("%t init done, sw_hdd %b", $time, dut.sw_hdd);
 	w = 0;

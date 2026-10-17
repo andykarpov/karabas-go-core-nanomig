@@ -12,10 +12,13 @@
 --   Minimig ram_address[22:1] uses the 512 KB segments 0-3 (chip RAM, $000000) and 12-15
 --   (slow RAM at $C00000, Kickstart at $F80000). MA = {ram_address[22], ram_address[20:1]}
 --   folds them into the 8 segments of the SRAM: chip RAM 0-3, slow RAM 4-6, Kickstart 7.
--- Kickstart: loaded by the MCU from the SD card (an external rom of core_minig.json) to SRAM
---   byte address 0x380000 (segment 7). A 256 KB Kickstart (1.2, 1.3) is mirrored in the upper half
---   of the segment, as on the A500. The 68000 is big endian: even bytes go to the high byte
---   (MD[15:8]).
+-- Kickstart: any *.rom of the SD card, chosen in the OSD (the FL item Kickstart, /amiga/kick.rom
+--   by default). The MCU sends it with the ioctl file loader at core start and when another file is
+--   chosen; it goes to SRAM byte address 0x380000 + offset (segment 7) and the Amiga is held in
+--   reset meanwhile. A 256 KB Kickstart (1.2, 1.3) is mirrored in the upper half of the segment,
+--   as on the A500. The 68000 is big endian: even bytes go to the high byte (MD[15:8]).
+-- Clock: the MSM6242B at $DC0000 (minimig.v); its time registers 0-12 are the RTC registers of
+--   the mcu link (rtc_mode 3 in core_minig.json).
 ------------------------------------------------------------------------------------------------------------------*/
 
 module karabas_minig_top #(
@@ -180,6 +183,10 @@ wire romloader_act;
 wire [31:0] romloader_addr;
 wire [7:0] romloader_data;
 wire romloader_wr;
+wire ioctl_act;
+wire [3:0] rtc_a, rtc_wdata; // the MSM6242B registers of minimig (rtc_a 0-12 in the mcu dpram)
+wire rtc_wr;
+wire [7:0] rtc_rdata8;
 wire [15:0] softsw_command, osd_command;
 wire mcu_busy;
 wire dvi_only;
@@ -246,11 +253,11 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.JOY_L(joy_l),
 	.JOY_R(joy_r),
 
-	.RTC_A(8'h00),
-	.RTC_DI(8'h00),
-	.RTC_DO(),
-	.RTC_CS(1'b0),
-	.RTC_WR_N(1'b1),
+	.RTC_A({ 4'h0, rtc_a }),
+	.RTC_DI({ 4'h0, rtc_wdata }),
+	.RTC_DO(rtc_rdata8),
+	.RTC_CS(rtc_wr),
+	.RTC_WR_N(~rtc_wr),
 
 	.UART_RX_DATA(),
 	.UART_RX_IDX(),
@@ -261,6 +268,7 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.ROMLOAD_ADDR(romloader_addr),
 	.ROMLOAD_DATA(romloader_data),
 	.ROMLOAD_WR(romloader_wr),
+	.IOCTL_ACTIVE(ioctl_act),
 
 	.SOFTSW_COMMAND(softsw_command),
 	.OSD_COMMAND(osd_command),
@@ -290,8 +298,10 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 );
 
 //---------- Soft switches (the order of the osd items in core_minig.json) ------------
-// items 0 and 1 are the file mounters DF0 / DF1 (no switch); Reset is always the last item
+// items 0-3 are the file mounters DF0-DF3 and item 4 the Kickstart file (no switch); Reset is
+// always the last item
 
+reg [1:0] sw_drives = 2'd1;    // floppy drives - 1: DF0 .. DF3
 reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
 reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
@@ -306,14 +316,15 @@ always @(posedge clk_sys) begin
 	if (prev_softsw_command != softsw_command) begin
 		prev_softsw_command <= softsw_command;
 		case (softsw_command[15:8])
-			8'h02: sw_chipset <= softsw_command[1:0];
-			8'h03: sw_chipmem <= softsw_command[1:0];
-			8'h04: sw_slowmem <= softsw_command[1:0];
-			8'h05: sw_ntsc <= softsw_command[0];
-			8'h06: sw_debug <= softsw_command[0];
-			8'h07: sw_wprot <= ~softsw_command[0]; // 0 = On
-			8'h08: sw_hdd <= softsw_command[0];
-			8'h09: sw_reset <= softsw_command[0];
+			8'h05: sw_drives <= softsw_command[1:0];
+			8'h06: sw_chipset <= softsw_command[1:0];
+			8'h07: sw_chipmem <= softsw_command[1:0];
+			8'h08: sw_slowmem <= softsw_command[1:0];
+			8'h09: sw_ntsc <= softsw_command[0];
+			8'h0A: sw_debug <= softsw_command[0];
+			8'h0B: sw_wprot <= ~softsw_command[0]; // 0 = On
+			8'h0C: sw_hdd <= softsw_command[0];
+			8'h0D: sw_reset <= softsw_command[0];
 			default: ;
 		endcase
 	end
@@ -364,8 +375,8 @@ wire [7:0] joy1 = { joy_r[5], joy_r[8], joy_r[7], joy_r[6], joy_r[1], joy_r[2], 
 
 //---------- Reset ------------
 
-// the Amiga is held in reset while the mcu loads the core roms, and by Ctrl + Amiga + Amiga
-wire cpu_reset_req = areset | mcu_busy | romloader_act | sw_reset | kbd_reset;
+// the Amiga is held in reset while the mcu loads the core roms or the Kickstart file, and by F12
+wire cpu_reset_req = areset | mcu_busy | romloader_act | ioctl_act | sw_reset | kbd_reset;
 reg [15:0] reset_cnt = 16'hFFFF;
 always @(posedge clk_sys) begin
 	if (cpu_reset_req)
@@ -398,7 +409,7 @@ reg  [15:0] ram_din;
 wire [5:0] chipset_config = { 1'b0, sw_chipset, sw_ntsc, 1'b0 };
 wire [7:0] memory_config = { 4'b0000, sw_slowmem, sw_chipmem };
 wire [2:0] fastram_config = 3'b000;
-wire [3:0] floppy_config = { 2'b01, sw_wprot, 1'b0 }; // 2 drives (DF0, DF1), write protect, no turbo
+wire [3:0] floppy_config = { sw_drives, sw_wprot, 1'b0 }; // drives - 1, write protect, no turbo
 wire [3:0] video_config = 4'b0000; // Amber filters off, scanlines not built
 wire [15:0] cf_dout;
 wire cf_oe;
@@ -483,7 +494,12 @@ nanomig nanomig(
 	.cf_reset_n(WRESET_N),
 	.cf_dout(cf_dout),
 	.cf_oe(cf_oe),
-	.cf_din(WD)
+	.cf_din(WD),
+
+	.rtc_a(rtc_a),
+	.rtc_wr(rtc_wr),
+	.rtc_wdata(rtc_wdata),
+	.rtc_rdata(rtc_rdata8[3:0])
 );
 
 assign WD = cf_oe ? cf_dout : 16'bzzzzzzzzzzzzzzzz;
@@ -546,23 +562,28 @@ reg        sram_drive = 1'b0;
 reg [1:0]  sram_wr_n = 2'b11; // [1] high byte MD[15:8], [0] low byte MD[7:0]
 reg [1:0]  sram_rd_n = 2'b11;
 
-// rom loader: one byte per ROMLOAD_WR, at least ~250 ns apart
+// rom loader: one byte per ROMLOAD_WR, at least ~250 ns apart. The ioctl loader (the Kickstart
+// file) uses the same signals with the file offset as the address: it goes to segment 7, and a
+// byte past 512 KB is dropped (it would wrap onto the start of the rom).
 reg [1:0] ld_cnt = 2'd0;
+wire ld_act = romloader_act | ioctl_act;
+wire [21:0] ld_addr = { romloader_addr[21:19] | {3{ioctl_act}}, romloader_addr[18:0] };
+wire ld_wr = romloader_wr & ~(ioctl_act & |romloader_addr[31:19]);
 
 // a Kickstart loaded into the lower 256 KB of segment 7 only (1.2, 1.3) is mirrored into the
 // upper 256 KB: the A500 sees a 256 KB rom at both $F80000 and $FC0000. A 512 KB rom writes both
 // halves.
 reg kick_lo = 1'b0, kick_hi = 1'b0;
 wire kick_mirror = kick_lo & ~kick_hi;
-reg romloader_act_d = 1'b0;
+reg ld_act_d = 1'b0;
 always @(posedge clk_sys) begin
-	romloader_act_d <= romloader_act;
-	if (romloader_act && !romloader_act_d) begin
+	ld_act_d <= ld_act;
+	if (ld_act && !ld_act_d) begin
 		kick_lo <= 1'b0;
 		kick_hi <= 1'b0;
 	end
-	else if (romloader_act && romloader_wr && romloader_addr[21:19] == 3'b111) begin
-		if (romloader_addr[18])
+	else if (ld_act && ld_wr && ld_addr[21:19] == 3'b111) begin
+		if (ld_addr[18])
 			kick_hi <= 1'b1;
 		else
 			kick_lo <= 1'b1;
@@ -570,10 +591,10 @@ always @(posedge clk_sys) begin
 end
 
 always @(posedge clk_sys) begin
-	if (romloader_act) begin
+	if (ld_act) begin
 		sram_rd_n <= 2'b11;
-		if (romloader_wr) begin
-			sram_a <= romloader_addr[21:1];
+		if (ld_wr) begin
+			sram_a <= ld_addr[21:1];
 			sram_d <= { romloader_data, romloader_data };
 			sram_drive <= 1'b1;
 			ld_cnt <= 2'd3;
@@ -582,7 +603,7 @@ always @(posedge clk_sys) begin
 			ld_cnt <= ld_cnt - 2'd1;
 
 		if (ld_cnt == 2'd3)
-			sram_wr_n <= romloader_addr[0] ? 2'b10 : 2'b01; // even byte -> high byte
+			sram_wr_n <= ld_addr[0] ? 2'b10 : 2'b01; // even byte -> high byte
 		else if (ld_cnt == 2'd1)
 			sram_wr_n <= 2'b11;
 	end

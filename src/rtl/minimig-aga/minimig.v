@@ -283,7 +283,13 @@ module minimig
 	output        cf_reset_n,
 	output [15:0] cf_dout,
 	output        cf_oe,
-	input  [15:0] cf_din
+	input  [15:0] cf_din,
+
+	// karabas: the MSM6242B clock at $DC0000 (A500 / A501), its time registers in the mcu
+	output  [3:0] rtc_a,         // register 0-15: $DC0003 + 4n
+	output        rtc_wr,        // one clock: the cpu writes register rtc_a (0-12 only)
+	output  [3:0] rtc_wdata,
+	input   [3:0] rtc_rdata      // register rtc_a (0-12), one clock after rtc_a
 );
 `default_nettype wire // ISE (Verilog-2001): no net type on the ports under 'none'
    
@@ -896,6 +902,20 @@ always @(posedge clk) begin
 end
 `endif
 
+// karabas: the MSM6242B of the A500 (A501 trapdoor card) at $DC0000, register n at $DC0003 + 4n
+// (D3..D0). Registers 0-12 (S1 S10 MI1 MI10 H1 H10 D1 D10 MO1 MO10 Y1 Y10 W) are in the mcu
+// (RTC_A / RTC_DO), which sends the time every 500 ms; a cpu write goes to the mcu, which sets
+// the clock chip. D, E, F are constants: D = 0 (HOLD 0, BUSY 0), E = 0, F = 4 (24 h). battclock
+// (Kickstart 2.0+) takes F = 4 for a running MSM6242B. The upstream ENABLE_RTC block below
+// counts seconds itself and is read only.
+assign rtc_a = cpu_address_out[5:2];
+assign rtc_wdata = cpu_data_out[3:0];
+reg rtc_wr_d;
+always @(posedge clk) rtc_wr_d <= sel_rtc & cpu_lwr;
+assign rtc_wr = sel_rtc & cpu_lwr & ~rtc_wr_d & (rtc_a < 4'd13);
+wire [3:0] rtc_nibble = (rtc_a == 4'd15) ? 4'd4 : (rtc_a >= 4'd13) ? 4'd0 : rtc_rdata;
+wire [15:0] msm_out = (sel_rtc && cpu_rd) ? {12'h000, rtc_nibble} : 16'h0000;
+
 // Toccata soundcard
 
 `ifdef ENABLE_TOCCATA
@@ -927,6 +947,7 @@ assign int6_toccata = 1'b0;
 assign cpu_data_in[15:0]= gary_data_out[15:0]
 							 | cia_data_out[15:0]
 							 | gayle_data_out[15:0]
+							 | msm_out // karabas
 `ifdef ENABLE_CART
 							 | cart_data_out[15:0]
 `endif

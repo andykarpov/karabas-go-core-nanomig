@@ -76,6 +76,9 @@ entity mcu is
 	 ROMLOAD_ADDR: buffer std_logic_vector(31 downto 0) := x"FFFFFFFF";
 	 ROMLOAD_DATA: out std_logic_vector(7 downto 0) := (others => '0');
 	 ROMLOAD_WR : out std_logic := '0';
+	 -- karabas: the ioctl file loader (FL osd items) writes through the same ROMLOAD_* signals,
+	 -- with the file offset as ROMLOAD_ADDR; the slot, size and extension are not used
+	 IOCTL_ACTIVE : buffer std_logic := '0';
 
     -- osd command
 	 OSD_COMMAND: out std_logic_vector(15 downto 0);
@@ -143,6 +146,9 @@ architecture rtl of mcu is
 	constant CMD_IMG_SEC      : std_logic_vector(7 downto 0) := x"43";
 	constant CMD_IMG_BUF_BANK : std_logic_vector(7 downto 0) := x"44";
 	constant CMD_IMG_BUF_DATA : std_logic_vector(7 downto 0) := x"45";
+	constant CMD_IOCTL_BANK   : std_logic_vector(7 downto 0) := x"52";
+	constant CMD_IOCTL_DATA   : std_logic_vector(7 downto 0) := x"53";
+	constant CMD_IOCTL_STATE  : std_logic_vector(7 downto 0) := x"55";
 	constant CMD_CAPS		: std_logic_vector(7 downto 0) := x"F7";
 	constant CMD_HW_SETUP	: std_logic_vector(7 downto 0) := x"F9";
 	constant CMD_RTC 			: std_logic_vector(7 downto 0) := x"FA";
@@ -176,6 +182,7 @@ architecture rtl of mcu is
 	 -- romload addr
 	 signal tmp_romload_addr    : std_logic_vector(31 downto 0);
 	 signal prev_romload_addr   : std_logic_vector(31 downto 0) := x"FFFFFFFF";
+	 signal ioctl_wr            : std_logic := '0';
 	 
 	-- spi fifo 
 	signal queue_di			: std_logic_vector(23 downto 0);
@@ -309,6 +316,7 @@ begin
 			IMG_MOUNTED <= (others => '0');
 			IMG_DATA_WR <= '0';
 			IMG_RESULT_WR <= '0';
+			ioctl_wr <= '0';
 			prev_spi_do_valid <= spi_do_valid;
 			if spi_do_valid = '1' and prev_spi_do_valid = '0' then
 				case spi_do(23 downto 16) is 
@@ -386,8 +394,8 @@ begin
 					-- osd commands					
 					when CMD_OSD => OSD_COMMAND <= spi_do(15 downto 0);
 					
-					-- rombank
-					when CMD_ROMBANK => 
+					-- rombank (and the ioctl bank: the same address bytes)
+					when CMD_ROMBANK | CMD_IOCTL_BANK => 
 						case spi_do(15 downto 8) is
 							when x"00" => tmp_romload_addr(15 downto 8) <= spi_do(7 downto 0);
 							when x"01" => tmp_romload_addr(23 downto 16) <= spi_do(7 downto 0);
@@ -395,14 +403,20 @@ begin
 							when others => null;
 						end case;
 						
-					-- romdata
-					when CMD_ROMDATA => 
+					-- romdata (and the ioctl data: the file offset is the address)
+					when CMD_ROMDATA | CMD_IOCTL_DATA => 
 						ROMLOAD_ADDR(31 downto 8) <= tmp_romload_addr(31 downto 8);
 						ROMLOAD_ADDR(7 downto 0) <= spi_do(15 downto 8);
 						ROMLOAD_DATA(7 downto 0) <= spi_do(7 downto 0);
+						if spi_do(23 downto 16) = CMD_IOCTL_DATA then
+							ioctl_wr <= IOCTL_ACTIVE;
+						end if;
 						
 					when CMD_ROMLOADER =>
 						ROMLOADER_ACTIVE <= spi_do(0);
+
+					when CMD_IOCTL_STATE =>
+						IOCTL_ACTIVE <= spi_do(0);
 							
 					-- rtc 
 					when CMD_RTC =>						
@@ -481,9 +495,12 @@ begin
 			-- burst data: the same loader signals as the classic bank + data commands
 			-- (the write strobes follow the address change below)
 			if burst_wr = '1' then
-				if burst_type = CMD_ROMDATA then
+				if burst_type = CMD_ROMDATA or burst_type = CMD_IOCTL_DATA then
 					ROMLOAD_ADDR <= burst_addr;
 					ROMLOAD_DATA <= burst_data;
+				end if;
+				if burst_type = CMD_IOCTL_DATA then
+					ioctl_wr <= IOCTL_ACTIVE;
 				end if;
 				if burst_type = CMD_IMG_BUF_DATA then
 					IMG_DATA_ADDR <= burst_addr(8 downto 0);
@@ -495,11 +512,19 @@ begin
 	end process;
 	
 	-- romload wr signal
+	-- karabas: the ioctl loader writes on each data byte (ioctl_wr, one clock after the address):
+	-- its file starts again at offset 0, which the address compare could miss. The rom loader
+	-- follows the address while it is off, so it does not write the last ioctl byte again.
 	process (CLK, ROMLOAD_ADDR, prev_romload_addr, ROMLOADER_ACTIVE)
 	begin
 		if rising_edge(CLK) then 
 			ROMLOAD_WR <= '0';
-			if (prev_romload_addr /= ROMLOAD_ADDR and ROMLOADER_ACTIVE = '1') then 
+			if ioctl_wr = '1' then
+				ROMLOAD_WR <= '1';
+			end if;
+			if ROMLOADER_ACTIVE = '0' then
+				prev_romload_addr <= ROMLOAD_ADDR;
+			elsif (prev_romload_addr /= ROMLOAD_ADDR) then 
 				ROMLOAD_WR <= '1';
 				prev_romload_addr <= ROMLOAD_ADDR;
 			end if;
