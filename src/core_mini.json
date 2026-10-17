@@ -1,7 +1,7 @@
 {
     "id": "nanomig",
     "name": "Nanomig",
-    "build": "26101702",
+    "build": "26101703",
     "bitstream": "karabas_mini.bin",
     "visible": true,
     "type": "osd",
@@ -21,6 +21,7 @@
         {"type": "S", "name": "Chipset", "options": ["OCS-A500", "OCS-A1000", "ECS"], "default": 0},
         {"type": "S", "name": "Chip RAM", "options": ["512K", "1M", "1.5M", "2M"], "default": 0},
         {"type": "S", "name": "Slow RAM", "options": ["None", "512K", "1M", "1.5M"], "default": 1},
+        {"type": "S", "name": "Fast RAM", "options": ["None", "2M", "4M", "8M"], "default": 0},
         {"type": "S", "name": "Video", "options": ["PAL", "NTSC"], "default": 0},
         {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}
     ]

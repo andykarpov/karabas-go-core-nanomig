@@ -134,9 +134,11 @@ assign ramdat = sel_rtg ? {ramdout[7:0], ramdout[15:8]}  : ramdout;
 // Kick ROM, f8-ff => 78->7f;
 // ramaddr[21] = cpu_addr[21] | cpu_addr[23]; 
 // All other bits passed through unmodified.
-assign ramaddr[28:23] = 6'b0;
-assign ramaddr[22:21] = {cpu_addr[22],cpu_addr[21]|cpu_addr[23]};
-assign ramaddr[20:1] = cpu_addr[20:1];
+// karabas: only the Zorro II fast RAM goes to ramsel here (no turbo chip / kick, cachecfg = 0), on
+// its own sdram: the plain cpu address, a23 included (the folded a21 | a23 put $800000 on $200000,
+// so 8 MB did not work)
+assign ramaddr[28:24] = 5'b0;
+assign ramaddr[23:1] = cpu_addr[23:1];
 
 assign fastchip_lds = lds_in;
 assign fastchip_uds = uds_in;
