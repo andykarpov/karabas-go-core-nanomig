@@ -328,8 +328,8 @@ mcu #(.BURST_MAX_MHZ(0)) mcu(
 );
 
 //---------- Soft switches (the order of the osd items in core.json) ------------
-// items 0-3 are the file mounters DF0-DF3 and item 4 the Kickstart file (no switch); Reset is
-// always the last item
+// items 0-3 are the file mounters DF0-DF3, item 4 the Kickstart file and item 13 the HDF file (no
+// switches); Reset is always the last item
 
 reg [1:0] sw_drives = 2'd1;    // floppy drives - 1: DF0 .. DF3
 reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
@@ -338,7 +338,7 @@ reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
 reg       sw_ntsc = 1'b0;
 reg       sw_debug = 1'b0;     // input debug bar
 reg       sw_wprot = 1'b1;     // floppy write protect
-reg       sw_hdd = 1'b0;       // 1 = the CF card is the IDE drive (Gayle), from the next reset on
+reg [1:0] sw_hdd = 2'd0;       // the IDE drive (Gayle): 0 = off, 1 = the CF card, 2 = the HDF image
 reg       sw_reset = 1'b0;
 reg [15:0] prev_softsw_command = 16'hFFFF;
 
@@ -353,8 +353,9 @@ always @(posedge clk_sys) begin
 			8'h09: sw_ntsc <= softsw_command[0];
 			8'h0A: sw_debug <= softsw_command[0];
 			8'h0B: sw_wprot <= ~softsw_command[0]; // 0 = On
-			8'h0C: sw_hdd <= softsw_command[0];
-			8'h0D: sw_reset <= softsw_command[0];
+			8'h0C: sw_hdd <= softsw_command[1:0];
+			// 8'h0D: the HDF file (slot 4), no switch
+			8'h0E: sw_reset <= softsw_command[0];
 			default: ;
 		endcase
 	end
@@ -425,6 +426,16 @@ wire sdc_busy, sdc_done, sdc_byte_in_strobe;
 wire [8:0] sdc_byte_addr;
 wire [7:0] sdc_byte_in_data, sdc_byte_out_data;
 wire img_active;
+wire sdc_error;
+wire [2:0] sdc_slot;           // the sdc index img_sdc serves
+wire [7:0] fdc_rd, fdc_wr;     // nanomig: the floppies, sdc index 0-3
+wire [31:0] fdc_sector;
+wire [7:0] fdc_out_data;
+wire hdf_rd, hdf_wr;           // hdf_ata: sdc index 4
+wire [31:0] hdf_sector;
+wire [7:0] hdf_out_data;
+wire [15:0] hdf_dout;
+wire [1:0] cf_cs_n;
 
 wire clk7_en, clk7n_en;
 wire hs, vs;
@@ -443,7 +454,17 @@ wire [3:0] floppy_config = { sw_drives, sw_wprot, 1'b0 }; // drives - 1, write p
 wire [3:0] video_config = 4'b0000; // Amber filters off, scanlines not built
 wire [15:0] cf_dout;
 wire cf_oe;
-wire [5:0] ide_config = { 5'b00000, sw_hdd }; // Gayle on: the IDE drive is the CF card
+wire [5:0] ide_config = { 5'b00000, sw_hdd != 2'd0 }; // Gayle on: the IDE drive is the CF card or the HDF
+wire hdf_sel = (sw_hdd == 2'd2); // the IDE bus of gayle_cf goes to hdf_ata, the CF card is not selected
+
+// img_sdc serves one sdc index at a time; each requester takes busy, done and the bytes of its own
+// index only (paula_floppy would take the ack of the HDF request as its own)
+wire fdc_own = (sdc_slot[2] == 1'b0);
+wire hdf_own = (sdc_slot == 3'd4);
+assign sdc_rd = { 3'b000, hdf_rd, fdc_rd[3:0] };
+assign sdc_wr = { 3'b000, hdf_wr, fdc_wr[3:0] };
+assign sdc_sector = (fdc_rd[3:0] != 4'd0 || fdc_wr[3:0] != 4'd0) ? fdc_sector : hdf_sector; // the lowest index first, as img_sdc
+assign sdc_byte_out_data = hdf_own ? hdf_out_data : fdc_out_data;
 
 nanomig nanomig(
 	.clk_sys(clk_sys),
@@ -484,17 +505,18 @@ nanomig nanomig(
 	.uart_tx(UART_TX),
 	.uart_rx(UART_RX),
 
-	.sdc_img_mounted(sdc_img_mounted),
+	// the floppies only: the IDE drives of nanomig.v (sdc index 4-5) are not used, hdf_ata is
+	.sdc_img_mounted({ 4'b0000, sdc_img_mounted[3:0] }),
 	.sdc_img_size(sdc_img_size),
-	.sdc_rd(sdc_rd),
-	.sdc_wr(sdc_wr),
-	.sdc_sector(sdc_sector),
-	.sdc_busy(sdc_busy),
-	.sdc_done(sdc_done),
-	.sdc_byte_in_strobe(sdc_byte_in_strobe),
+	.sdc_rd(fdc_rd),
+	.sdc_wr(fdc_wr),
+	.sdc_sector(fdc_sector),
+	.sdc_busy(sdc_busy & fdc_own),
+	.sdc_done(sdc_done & fdc_own),
+	.sdc_byte_in_strobe(sdc_byte_in_strobe & fdc_own),
 	.sdc_byte_addr(sdc_byte_addr),
 	.sdc_byte_in_data(sdc_byte_in_data),
-	.sdc_byte_out_data(sdc_byte_out_data),
+	.sdc_byte_out_data(fdc_out_data),
 
 	.ram_data(ram_dout),
 	.ramdata_in(ram_din),
@@ -518,13 +540,13 @@ nanomig nanomig(
 
 	// the CF card slot: the IDE drive of Gayle (minimig-aga/gayle_cf.v)
 	.cf_a(WA),
-	.cf_cs_n(WCS_N),
+	.cf_cs_n(cf_cs_n),
 	.cf_rd_n(WRD_N),
 	.cf_wr_n(WWR_N),
 	.cf_reset_n(WRESET_N),
 	.cf_dout(cf_dout),
 	.cf_oe(cf_oe),
-	.cf_din(WD),
+	.cf_din(hdf_sel ? hdf_dout : WD),
 
 	.rtc_a(rtc_a),
 	.rtc_wr(rtc_wr),
@@ -532,7 +554,38 @@ nanomig nanomig(
 	.rtc_rdata(rtc_rdata8[3:0])
 );
 
-assign WD = cf_oe ? cf_dout : 16'bzzzzzzzzzzzzzzzz;
+assign WCS_N = hdf_sel ? 2'b11 : cf_cs_n;
+assign WD = (cf_oe && !hdf_sel) ? cf_dout : 16'bzzzzzzzzzzzzzzzz;
+
+//---------- HDF image: an ATA drive on the IDE bus of gayle_cf (sdc index 4) ------------
+
+hdf_ata hdf_ata(
+	.clk(clk_sys),
+	.reset(areset),
+	.ata_reset(~WRESET_N),
+
+	.a(WA),
+	.cs_n(cf_cs_n),
+	.rd_n(WRD_N),
+	.wr_n(WWR_N),
+	.din(cf_dout),
+	.dout(hdf_dout),
+
+	.img_mounted(sdc_img_mounted[4]),
+	.img_size(sdc_img_size),
+	.sdc_rd(hdf_rd),
+	.sdc_wr(hdf_wr),
+	.sdc_sector(hdf_sector),
+	.sdc_busy(sdc_busy & hdf_own),
+	.sdc_done(sdc_done & hdf_own),
+	.sdc_error(sdc_error),
+	.sdc_byte_in_strobe(sdc_byte_in_strobe & hdf_own),
+	.sdc_byte_addr(sdc_byte_addr),
+	.sdc_byte_in_data(sdc_byte_in_data),
+	.sdc_byte_out_data(hdf_out_data),
+
+	.led()
+);
 
 //---------- Disk images (file mounter of the mcu) ------------
 
@@ -559,6 +612,8 @@ img_sdc img_sdc(
 	.sdc_sector(sdc_sector),
 	.sdc_busy(sdc_busy),
 	.sdc_done(sdc_done),
+	.sdc_error(sdc_error),
+	.sdc_slot(sdc_slot),
 	.sdc_byte_in_strobe(sdc_byte_in_strobe),
 	.sdc_byte_addr(sdc_byte_addr),
 	.sdc_byte_in_data(sdc_byte_in_data),
