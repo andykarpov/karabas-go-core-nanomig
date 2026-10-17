@@ -6,9 +6,14 @@
 // writes them back to LBA 3 with WRITE SECTORS (waits for DRQ on the alternate status, then for
 // the interrupt) and writes COLOR00 = $F00. The CF card is an ATA device model (as tb_gayle_cf).
 // Checks the byte order in memory and on the card, and that the program gets to its end.
+// HDF = 1: HDD = HDF (soft switch 12 = 2), the drive is hdf_ata on an image in slot 4 of the
+// file mounter, served by a model of the mcu firmware over the spi link (as tb_img.v); the CF
+// card must see no cycle.
 // Ends with "tb_hdd: N errors".
 
 module tb_hdd;
+
+parameter HDF = 0;
 
 reg clk50 = 1'b0;
 always #10 clk50 = ~clk50;
@@ -196,6 +201,7 @@ assign mcu_io[0] = 1'b1; // burst cs_n
 assign mcu_io[2] = 1'b1; // sd2 cs_n
 assign mcu_io[3] = 1'b1; // ft cs_n
 
+reg [7:0] rx;
 task spi_byte(input [7:0] b);
 	integer k;
 	begin
@@ -203,22 +209,86 @@ task spi_byte(input [7:0] b);
 			mcu_mosi = b[k];
 			#31;
 			mcu_sck = 1'b1;
+			rx[k] = mcu_miso;
 			#31;
 			mcu_sck = 1'b0;
 		end
 	end
 endtask
 
+// a frame of the mcu; the reply frame of the fpga that comes back in it goes to the firmware model
+reg [7:0] rc, ra, rd;
 task frame(input [7:0] c, input [7:0] a, input [7:0] d);
 	begin
 		mcu_cs_n = 1'b0;
 		#100;
-		spi_byte(c);
-		spi_byte(a);
-		spi_byte(d);
+		spi_byte(c); rc = rx;
+		spi_byte(a); ra = rx;
+		spi_byte(d); rd = rx;
 		#50;
 		mcu_cs_n = 1'b1;
 		#500;
+		if (HDF) handle_reply;
+	end
+endtask
+
+// ---------------- mcu firmware model (HDF): the file mounter, as tb_img.v ----------------
+
+reg [7:0] hd [0:64*512-1]; // the image, 64 sectors, no RDB
+reg [31:0] req_lba = 0;
+reg [7:0] req_slot = 0, req_op = 0, wr_bank = 0;
+reg req_pending = 0;
+reg [15:0] wsum_rx = 0;
+integer wr_count = 0, n_rd = 0, n_wr = 0;
+reg [7:0] wr_buf [0:511];
+
+task handle_reply;
+	case (rc)
+		8'h42: req_lba[ra*8 +: 8] = rd;
+		8'h43: begin req_slot = ra; req_op = rd; req_pending = 1; end
+		8'h44: if (ra == 8'h10) wsum_rx[7:0] = rd; else if (ra == 8'h11) wsum_rx[15:8] = rd; else wr_bank = rd;
+		8'h45: begin wr_buf[{ wr_bank[0], ra }] = rd; wr_count = wr_count + 1; end
+		default: ;
+	endcase
+endtask
+
+// a poll frame, and the request it completed
+reg [15:0] sum;
+task serve;
+	integer i, n;
+	begin
+		frame(8'hFF, 8'h00, 8'h00);
+		if (req_pending) begin
+			req_pending = 0;
+			$display("%t mcu: request slot %0d op %0d lba %0d", $time, req_slot, req_op, req_lba);
+			check("request slot", req_slot, 4);
+			if (req_op == 1) begin
+				n_rd = n_rd + 1;
+				sum = 0;
+				for (i = 0; i < 512; i = i + 1) begin
+					if (i % 256 == 0) frame(8'h44, 8'h00, i / 256);
+					frame(8'h45, i % 256, hd[req_lba * 512 + i]);
+					sum = sum + hd[req_lba * 512 + i];
+				end
+				frame(8'h42, 8'h00, sum[7:0]);
+				frame(8'h42, 8'h01, sum[15:8]);
+				frame(8'h43, req_slot, 8'h01);
+			end
+			else begin
+				wr_count = 0;
+				n = 0;
+				while (wr_count < 512 && n < 4000) begin frame(8'hFF, 0, 0); n = n + 1; end
+				n = 0;
+				while (n < 10) begin frame(8'hFF, 0, 0); n = n + 1; end
+				sum = 0;
+				for (i = 0; i < 512; i = i + 1) sum = sum + wr_buf[i];
+				check("write bytes", wr_count, 512);
+				check("write sum", sum, wsum_rx);
+				for (i = 0; i < 512; i = i + 1) hd[req_lba * 512 + i] = wr_buf[i];
+				n_wr = n_wr + 1;
+				frame(8'h43, req_slot, 8'h01);
+			end
+		end
 	end
 endtask
 
@@ -447,6 +517,10 @@ always @(posedge dut.clk_sys) begin
 end
 
 integer ncf = 0;
+always @(negedge cf_rd_n or negedge cf_wr_n) if (HDF && cf_cs_n != 2'b11) begin
+	errors = errors + 1;
+	$display("%t ERROR a cycle on the CF card in HDF mode", $time);
+end
 always @(negedge cf_rd_n or negedge cf_wr_n) if (ncf < 30) begin
 	ncf = ncf + 1;
 	#60 $display("%t cf %s cs %b a %0d data %04x", $time, cf_rd_n ? "wr" : "rd", cf_cs_n, cf_a, cf_bus);
@@ -465,6 +539,35 @@ always @(posedge dut.clk_sys)
 integer w;
 initial begin
 	#200000; // pll lock
+	if (HDF) begin
+		for (w = 0; w < 64*512; w = w + 1) hd[w] = w[7:0] ^ (w >> 9);
+		frame(8'h05, 8'h0C, 8'h02);   // HDD = HDF (osd item 12)
+		// mount slot 4 (the HDF item): size 0, then 64 sectors
+		frame(8'h40, 8'h00, 8'h04);
+		for (w = 0; w < 8; w = w + 1) frame(8'h41, w, 8'h00);
+		for (w = 0; w < 8; w = w + 1) frame(8'h41, w, (64'd32768 >> (8 * w)) & 8'hFF);
+		// hdf_ata reads sector 0 for the RDB
+		w = 0;
+		while (dut.hdf_ata.geo_ok !== 1'b1 && w < 2000) begin serve; w = w + 1; end
+		check("geometry after mount", dut.hdf_ata.geo_ok, 1'b1);
+		check("hdf cylinders", dut.hdf_ata.id_cyl, 0); // 64 sectors < 16 * 63: no cylinder
+		frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
+		$display("%t init done, sw_hdd %b", $time, dut.sw_hdd);
+		w = 0;
+		while (!done && $time < 64'd9000000000) begin serve; w = w + 1; end
+		check("program done", done, 1'b1);
+		check("mcu reads", n_rd, 1);
+		check("mcu writes", n_wr, 1);
+		check("status after identify", sram_hi[21'h100100], 8'h58);
+		check("identify 0", { sram_lo[21'h100000], sram_hi[21'h100000] }, 16'h0040);
+		check("identify model", { sram_lo[21'h100000 + 27], sram_hi[21'h100000 + 27] }, "KA");
+		for (w = 0; w < 256; w = w + 1) begin
+			check("image byte 0", hd[3*512 + 2*w], sram_hi[21'h100000 + w]);
+			check("image byte 1", hd[3*512 + 2*w + 1], sram_lo[21'h100000 + w]);
+		end
+		$display("tb_hdd: %0d errors", errors);
+		$finish;
+	end
 	frame(8'h05, 8'h0C, 8'h01);   // HDD = CF card (osd item 12)
 	frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 	$display("%t init done, sw_hdd %b", $time, dut.sw_hdd);

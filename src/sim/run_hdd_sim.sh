@@ -1,9 +1,12 @@
 #!/bin/bash
 # Simulate the Mini G top with ISim (Xilinx ISE 14.7): the CF card slot (tb_hdd.v).
 # Usage: src/sim/run_hdd_sim.sh [run time, default 6 ms] (about a minute)
+#        src/sim/run_hdd_sim.sh hdf [run time, default 12 ms]: HDD = HDF, the image on the file mounter
 # Needs src/roms/kick13.rom (512 KB).
 set -e
-TIME="${1:-6 ms}"
+HDF=0
+if [ "$1" = "hdf" ]; then HDF=1; shift; fi
+if [ $HDF = 1 ]; then TIME="${1:-12 ms}"; else TIME="${1:-6 ms}"; fi
 set --
 source /opt/Xilinx/14.7/ISE_DS/settings64.sh > /dev/null
 
@@ -32,8 +35,8 @@ python3 ../../mcu_sim_wrap.py ../../../rtl/mcu/mcu.vhd mcu_sim.vhd
 	echo "verilog work \"$XILINX/verilog/src/glbl.v\""
 } > tb.prj
 
-fuse -incremental -prj tb.prj -L unisims_ver -L unisim -top work.tb_hdd -top work.glbl -o tb_hdd.exe > fuse.log || { tail -30 fuse.log; exit 1; }
+fuse -incremental -prj tb.prj -L unisims_ver -L unisim -top work.tb_hdd -top work.glbl -generic_top "HDF=$HDF" -o tb_hdd.exe > fuse.log || { tail -30 fuse.log; exit 1; }
 echo "run $TIME; quit" > run.tcl
 ./tb_hdd.exe -tclbatch run.tcl > sim.log
-grep -E "ERROR|errors|COLOR00|intrq|init done| cf |cpu (rd|wr)" sim.log | head -120
+grep -E "ERROR|errors|COLOR00|intrq|init done| cf |cpu (rd|wr)|mcu:" sim.log | head -120
 grep -q "tb_hdd: 0 errors" sim.log

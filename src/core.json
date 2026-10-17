@@ -1,7 +1,7 @@
 {
     "id": "nanomig",
     "name": "Nanomig",
-    "build": "26101700",
+    "build": "26101701",
     "bitstream": "karabas_go.bin",
     "visible": true,
     "type": "osd",
@@ -22,7 +22,8 @@
         {"type": "S", "name": "Video", "options": ["PAL", "NTSC"], "default": 0},
         {"type": "S", "name": "Debug", "options": ["Off", "On"], "default": 0, "hotkey": "Menu+D"},
         {"type": "S", "name": "Write protect", "options": ["On", "Off"], "default": 1},
-        {"type": "S", "name": "HDD", "options": ["Off", "CF card"], "default": 1},
+        {"type": "S", "name": "HDD", "options": ["Off", "CF card", "HDF"], "default": 1},
+        {"type": "F", "name": "HDF", "slot": 4, "extensions": ".hdf"},
         {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}
     ]
 }

@@ -21,6 +21,9 @@
    the next sector of the track as soon as sdc_busy is up, long before the mcu has taken the
    sector. Then the request goes out and the buffer is queued as IMG_BUF_BANK (at offset 0 and
    256) + IMG_BUF_DATA frames;
+ - sdc_slot is the index of the request (a requester takes sdc_busy, sdc_done and the bytes only
+   with its own index: the floppy would take the ack of another index as its own); sdc_error comes
+   with sdc_done when the request failed;
  - the end is the IMG_SEC answer of the mcu. Without an answer in TIMEOUT the whole request is
    sent again (RETRIES times; a reply frame of the fpga can get lost on the link), then the request
    ends without data (a firmware without the file mounter);
@@ -60,6 +63,8 @@ module img_sdc #(
 	input wire [31:0] sdc_sector,
 	output reg sdc_busy = 1'b0,
 	output reg sdc_done = 1'b0,
+	output reg sdc_error = 1'b0,    // with sdc_done: the request failed (a read gave zero bytes)
+	output wire [2:0] sdc_slot,     // the index of the request, while sdc_busy and at sdc_done
 	output reg sdc_byte_in_strobe = 1'b0,
 	output reg [8:0] sdc_byte_addr = 9'd0,
 	output reg [7:0] sdc_byte_in_data = 8'd0,
@@ -114,6 +119,7 @@ always @(posedge clk) begin
 end
 
 assign active = sdc_busy;
+assign sdc_slot = slot;
 
 wire [7:0] req = sdc_rd | sdc_wr;
 wire [2:0] req_slot = req[0] ? 3'd0 : req[1] ? 3'd1 : req[2] ? 3'd2 : req[3] ? 3'd3 :
@@ -222,6 +228,7 @@ always @(posedge clk) begin
 			if (wpos == 10'd512) begin
 				sdc_busy <= 1'b0;
 				sdc_done <= 1'b1;
+				sdc_error <= 1'b0;
 				state <= S_IDLE;
 			end
 			else begin
@@ -245,6 +252,7 @@ always @(posedge clk) begin
 			if (wpos == 10'd512) begin
 				sdc_busy <= 1'b0;
 				sdc_done <= 1'b1;
+				sdc_error <= 1'b1;
 				state <= S_IDLE;
 			end
 			else begin
@@ -300,6 +308,7 @@ always @(posedge clk) begin
 			if ((img_result_wr && img_result == 8'd1) || ((img_result_wr || timeout == 24'd1) && tries == RETRIES)) begin
 				sdc_busy <= 1'b0;
 				sdc_done <= 1'b1;
+				sdc_error <= !(img_result_wr && img_result == 8'd1);
 				state <= S_IDLE;
 			end
 			else if (img_result_wr || timeout == 24'd1) begin
