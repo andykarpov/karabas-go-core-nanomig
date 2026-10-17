@@ -5,7 +5,7 @@
     "bitstream": "karabas_minig.bin",
     "visible": true,
     "type": "osd",
-    "order": 6,
+    "order": 2,
     "eeprom_bank": 255,
     "rtc_mode": 3,
     "roms": [],
