@@ -94,7 +94,7 @@ module nanomig (
    output        _ram_oe,     // sram output enable
 
    output reg    fastram_sel,
-   output [22:1] fastram_addr,
+   output [23:1] fastram_addr, // karabas: a23 for 8 MB of Zorro II fast RAM
    output        fastram_lds,
    output        fastram_uds,
    input  [15:0] fastram_dout,
@@ -223,16 +223,21 @@ reg	    ram_cs_triggerD;
 always @(posedge clk_sys)
   ram_cs_triggerD <= ram_cs_trigger;   
    
-// neg/clk7
+// karabas: ram_ready is one clock per access, and every access of the cpu is a request of its own.
+// As a level held while ram_sel stays up it ended the second word of a long (and any access that
+// follows a fast ram access directly) at once, with the data of the first. The cpu waits without a
+// clock enable, so the pulse is never dropped (cpu_wrapper: no clock enable on two clocks in a row).
+// The fast ram has an sdram of its own, so the request does not wait for cpu_ph2: it goes up when
+// ram_sel is up and none is pending, from the second clock after a ready pulse on (the cpu takes the
+// pulse at the next edge, and ram_sel / the address are those of its next access after it).
 reg frr_d=1'b0;
+reg ram_ready_d=1'b0;
 always @(posedge clk_sys) begin
-   if(!cpu_rst)
-      ram_ready<=1'b0;
-   else if(!ram_sel)
-      ram_ready<=1'b0;
-   else if(fastram_ready!=frr_d)
+   ram_ready <= 1'b0;
+   if(cpu_rst && ram_sel && fastram_ready!=frr_d)
       ram_ready<=1'b1;
    frr_d <= fastram_ready;
+   ram_ready_d <= ram_ready;
 end
    
 cpu_wrapper cpu_wrapper
@@ -283,14 +288,12 @@ cpu_wrapper cpu_wrapper
 	.nmi_addr     (cpu_nmi_addr    )
 );
    
-reg ram_sel_d;
+// karabas: a request per access (see ram_ready)
 always @(posedge clk_sys) begin
-   if( cpu_ph2) begin
-		if(!ram_sel_d)
-			fastram_sel <= ram_sel;
-		ram_sel_d <= ram_sel;
-	end
-   if( fastram_ready != frr_d ) fastram_sel <= 1'b0;   
+   if(!cpu_rst || fastram_ready != frr_d)
+      fastram_sel <= 1'b0;
+   else if(ram_sel && !fastram_sel && !ram_ready && !ram_ready_d)
+      fastram_sel <= 1'b1;
 end
 
 assign fastram_addr = ram_addr;

@@ -131,14 +131,6 @@ assign BEEPER = 1'b0;
 assign UART_CTS = 1'b0;
 assign ESP_RESET_N = 1'bz;
 assign ESP_BOOT_N = 1'bz;
-assign SDR_BA = 2'b00;
-assign SDR_A = 13'd0;
-assign SDR_CLK = 1'b0;
-assign SDR_DQM = 2'b11;
-assign SDR_WE_N = 1'b1;
-assign SDR_CAS_N = 1'b1;
-assign SDR_RAS_N = 1'b1;
-assign SDR_DQ = 16'bzzzzzzzzzzzzzzzz;
 assign SD_CS_N = 1'b1;
 assign SD_DI = 1'b1;
 assign SD_CLK = 1'b0;
@@ -335,6 +327,7 @@ reg [1:0] sw_hdd = 2'd0;       // IDE device 0 (Gayle): 0 = off, 1 = the CF card
 reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
 reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
 reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
+reg [1:0] sw_fastmem = 2'd0;   // Zorro II fast RAM (sdram): 0 = none, 1 = 2M, 2 = 4M, 3 = 8M
 reg       sw_ntsc = 1'b0;
 reg       sw_reset = 1'b0;
 reg [15:0] prev_softsw_command = 16'hFFFF;
@@ -347,8 +340,9 @@ always @(posedge clk_sys) begin
 			8'h08: sw_chipset <= softsw_command[1:0];
 			8'h09: sw_chipmem <= softsw_command[1:0];
 			8'h0A: sw_slowmem <= softsw_command[1:0];
-			8'h0B: sw_ntsc <= softsw_command[0];
-			8'h0C: sw_reset <= softsw_command[0];
+			8'h0B: sw_fastmem <= softsw_command[1:0];
+			8'h0C: sw_ntsc <= softsw_command[0];
+			8'h0D: sw_reset <= softsw_command[0];
 			default: ;
 		endcase
 	end
@@ -399,8 +393,10 @@ wire [7:0] joy1 = { joy_r[5], joy_r[8], joy_r[7], joy_r[6], joy_r[1], joy_r[2], 
 
 //---------- Reset ------------
 
-// the Amiga is held in reset while the mcu loads the core roms or the Kickstart file, and by F12
-wire cpu_reset_req = areset | mcu_busy | romloader_act | ioctl_act | sw_reset | kbd_reset;
+// the Amiga is held in reset while the mcu loads the core roms or the Kickstart file, by F12 and
+// until the sdram (fast ram) is initialised
+wire fastram_init_done;
+wire cpu_reset_req = areset | mcu_busy | romloader_act | ioctl_act | sw_reset | kbd_reset | ~fastram_init_done;
 reg [15:0] reset_cnt = 16'hFFFF;
 always @(posedge clk_sys) begin
 	if (cpu_reset_req)
@@ -431,6 +427,9 @@ wire [15:0] hdf_dout;
 wire hdf_dev;                  // the IDE device the host talks to (DEV)
 wire hdf_dev1_here;            // HDF1 has an image
 wire [1:0] cf_cs_n;
+wire fastram_sel, fastram_lds, fastram_uds, fastram_wr, fastram_ready;
+wire [23:1] fastram_addr;
+wire [15:0] fastram_dout, fastram_din;
 
 wire clk7_en, clk7n_en;
 wire hs, vs;
@@ -444,7 +443,7 @@ reg  [15:0] ram_din;
 
 wire [5:0] chipset_config = { 1'b0, sw_chipset, sw_ntsc, 1'b0 };
 wire [7:0] memory_config = { 4'b0000, sw_slowmem, sw_chipmem };
-wire [2:0] fastram_config = 3'b000;
+wire [2:0] fastram_config = { 1'b0, sw_fastmem };
 wire [3:0] floppy_config = { drives, 2'b00 }; // drives - 1, no write protect, no turbo
 wire [3:0] video_config = 4'b0000; // Amber filters off, scanlines not built
 wire [15:0] cf_dout;
@@ -540,15 +539,15 @@ nanomig nanomig(
 	._ram_we(_ram_we),
 	._ram_oe(_ram_oe),
 
-	// no fast ram (fastram_config = 0)
-	.fastram_sel(),
-	.fastram_addr(),
-	.fastram_lds(),
-	.fastram_uds(),
-	.fastram_dout(16'h0000),
-	.fastram_din(),
-	.fastram_wr(),
-	.fastram_ready(1'b0),
+	// Zorro II fast ram on the sdram
+	.fastram_sel(fastram_sel),
+	.fastram_addr(fastram_addr),
+	.fastram_lds(fastram_lds),
+	.fastram_uds(fastram_uds),
+	.fastram_dout(fastram_dout),
+	.fastram_din(fastram_din),
+	.fastram_wr(fastram_wr),
+	.fastram_ready(fastram_ready),
 
 	// the CF card slot: the IDE drive of Gayle (minimig-aga/gayle_cf.v)
 	.cf_a(WA),
@@ -600,6 +599,43 @@ hdf_ata hdf_ata(
 	.sdc_byte_out_data(hdf_out_data),
 
 	.led()
+);
+
+//---------- Fast RAM: the sdram at clk_sys, its clock inverted ------------
+
+fastram_sdram fastram_sdram(
+	.clk(clk_sys),
+	.reset(areset),
+
+	.sel(fastram_sel),
+	.addr(fastram_addr),
+	.lds(fastram_lds),
+	.uds(fastram_uds),
+	.wr(fastram_wr),
+	.din(fastram_din),
+	.dout(fastram_dout),
+	.ready(fastram_ready),
+	.init_done(fastram_init_done),
+
+	.sd_ba(SDR_BA),
+	.sd_a(SDR_A),
+	.sd_dqm(SDR_DQM),
+	.sd_ras_n(SDR_RAS_N),
+	.sd_cas_n(SDR_CAS_N),
+	.sd_we_n(SDR_WE_N),
+	.sd_dq(SDR_DQ)
+);
+
+// a command put out at a rising edge of clk_sys is in the middle of its sdram clock
+ODDR2 #(.DDR_ALIGNMENT("NONE"), .INIT(1'b0), .SRTYPE("SYNC")) u_sdr_clk (
+	.Q(SDR_CLK),
+	.C0(clk_sys),
+	.C1(~clk_sys),
+	.CE(1'b1),
+	.D0(1'b0),
+	.D1(1'b1),
+	.R(1'b0),
+	.S(1'b0)
 );
 
 //---------- Disk images (file mounter of the mcu) ------------
