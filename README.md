@@ -235,7 +235,9 @@ battery-backed clock of the board.
 ## Building
 
 The core is built with Xilinx ISE 14.7 on Linux: `src/build_go.sh`, `src/build_mini.sh`,
-`src/build_minig.sh` (one at a time: they share the work directories). They need the sibling repo
+`src/build_minig.sh` (one at a time: they share the work directories). The board modules are the
+submodule `modules/` ([karabas-go-modules](https://github.com/andykarpov/karabas-go-modules)): clone with
+`git clone --recursive` or run `git submodule update --init`. The builds need the sibling repo
 [karabas-go-tools](https://github.com/andykarpov/karabas-go-tools) next to this one for
 `make_core.py`. The simulations (ISim) are in `src/sim`. `CLAUDE.md` has the details of the design
 and of the tests.

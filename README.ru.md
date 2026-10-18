@@ -236,7 +236,9 @@ Amiga видит часы расширения памяти A500 (MSM6242B по 
 ## Сборка
 
 Ядро собирается Xilinx ISE 14.7 под Linux: `src/build_go.sh`, `src/build_mini.sh`,
-`src/build_minig.sh` (по одному: у них общие рабочие каталоги). Для `make_core.py` рядом с этим
+`src/build_minig.sh` (по одному: у них общие рабочие каталоги). Модули платы — submodule `modules/`
+([karabas-go-modules](https://github.com/andykarpov/karabas-go-modules)): клонируйте с
+`git clone --recursive` или выполните `git submodule update --init`. Для `make_core.py` рядом с этим
 репозиторием должен лежать репозиторий
 [karabas-go-tools](https://github.com/andykarpov/karabas-go-tools). Симуляции (ISim) — в
 `src/sim`. Подробности устройства ядра и тестов — в `CLAUDE.md`.
