@@ -9,7 +9,7 @@ mkdir -p build/hdf
 cd build/hdf
 cat > tb.prj <<PRJ
 verilog work "../../../rtl/minimig-aga/gayle_cf.v"
-verilog work "../../../rtl/mcu/img_sdc.v"
+verilog work "../../../../modules/rtl/mcu/img_sdc.v"
 verilog work "../../../rtl/mcu/hdf_ata.v"
 verilog work "../../tb_hdf.v"
 PRJ

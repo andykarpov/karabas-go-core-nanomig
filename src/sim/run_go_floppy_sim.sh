@@ -20,14 +20,14 @@ EOF
 # the drive model reads the flux of cylinder 0 (not used here)
 python3 -c "open('t0.hex','w').write('aaaa\n'*6250); open('t1.hex','w').write('aaaa\n'*6250)"
 
-python3 ../../mcu_sim_wrap.py ../../../rtl/mcu/mcu.vhd mcu_sim.vhd
+python3 ../../mcu_sim_wrap.py ../../../../modules/rtl/mcu/mcu.vhd mcu_sim.vhd
 
 # the synthesis source list as in run_rtc_sim.sh (models of fifo.v / dpram.v, mcu.vhd with 'out'
 # ports)
 {
 	echo 'vhdl work "../../fifo_sim.vhd"'
 	echo 'vhdl work "../../dpram_sim.vhd"'
-	grep -v -e 'rtl/fifo/fifo.v' -e 'rtl/memory/dpram.v' ../../../karabas_go.prj | sed -e 's|"rtl/mcu/mcu.vhd"|"mcu_sim.vhd"|' -e 's|"rtl/|"../../../rtl/|'
+	grep -v -e 'modules/rtl/mem/fifo.v' -e 'modules/rtl/mem/dpram.v' ../../../karabas_go.prj | sed -e 's|"../modules/rtl/mcu/mcu.vhd"|"mcu_sim.vhd"|' -e 's|"rtl/|"../../../rtl/|' -e 's|"../modules/|"../../../../modules/|'
 	echo 'verilog work "../../fdd_model.v"'
 	echo 'verilog work "../../tb_go_floppy.v"'
 	echo "verilog work \"$XILINX/verilog/src/glbl.v\""
