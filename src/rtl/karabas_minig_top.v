@@ -197,16 +197,6 @@ wire [12:0] joy_l, joy_r;
 wire matrix_cmd_wr;
 wire [23:0] matrix_cmd;
 
-// mcu chip selects: low goes through at once, high only after 3 clocks high. A short spike on a
-// chip select (the sram outputs switch next to them all the time) reset the spi receivers in
-// the middle of a frame: the frame got lost in both directions.
-reg [2:0] mcu_cs_sync = 3'b111, mcu_burst_cs_sync = 3'b111;
-always @(posedge clk_sys) begin
-	mcu_cs_sync <= { mcu_cs_sync[1:0], MCU_CS_N };
-	mcu_burst_cs_sync <= { mcu_burst_cs_sync[1:0], MCU_IO[0] };
-end
-wire mcu_cs_n = MCU_CS_N & (&mcu_cs_sync);
-wire mcu_burst_cs_n = MCU_IO[0] & (&mcu_burst_cs_sync);
 
 // burst transfers from the mcu (karabas-go-firmware docs/burst_protocol.md)
 wire mcu_burst_ready;
@@ -215,17 +205,20 @@ assign MCU_IO[0] = 1'bz;
 assign MCU_IO[5:2] = 4'bzzzz;
 
 // Rev.G has MCU_SCK on a global clock pin: bursts at up to 32 MHz
-mcu #(.BURST_MAX_MHZ(32)) mcu(
+// mcu chip selects: kg_mcu lets a low through at once and a high only after 3 clocks high
+// (CS_FILTER). A short spike on a chip select (the sram outputs switch next to them all the
+// time) reset the spi receivers in the middle of a frame: the frame got lost in both directions.
+kg_mcu #(.BURST_MAX_MHZ(32), .CS_FILTER(3), .ENABLE_IMG(1)) mcu(
 	.CLK(clk_sys),
 	.N_RESET(~areset),
 
 	.MCU_MOSI(MCU_MOSI),
 	.MCU_MISO(MCU_MISO),
 	.MCU_SCK(MCU_SCK),
-	.MCU_SS(mcu_cs_n),
+	.MCU_SS(MCU_CS_N),
 	.MCU_SPI_FT_SS(MCU_IO[3]),
 	.MCU_SPI_SD2_SS(MCU_IO[2]),
-	.MCU_BURST_CS_N(mcu_burst_cs_n),
+	.MCU_BURST_CS_N(MCU_IO[0]),
 	.MCU_BURST_READY(mcu_burst_ready),
 
 	.MS_X(ms_x),
@@ -255,6 +248,13 @@ mcu #(.BURST_MAX_MHZ(32)) mcu(
 	.UART_RX_IDX(),
 	.UART_TX_DATA(8'h00),
 	.UART_TX_WR(1'b0),
+	.UART_TX_MODE(1'b0),
+	.UART_DLM(8'h00),
+	.UART_DLL(8'h00),
+	.UART_DLM_WR(1'b0),
+	.UART_DLL_WR(1'b0),
+	.DEBUG_ADDR(16'h0000),
+	.DEBUG_DATA(16'h0000),
 
 	.ROMLOADER_ACTIVE(romloader_act),
 	.ROMLOAD_ADDR(romloader_addr),
