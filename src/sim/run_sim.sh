@@ -18,14 +18,14 @@ open("kick_hi.hex", "w").write("\n".join("%02x" % b for b in d[0::2]) + "\n")
 open("kick_lo.hex", "w").write("\n".join("%02x" % b for b in d[1::2]) + "\n")
 EOF
 
-python3 ../mcu_sim_wrap.py ../../../modules/rtl/mcu/mcu.vhd mcu_sim.vhd
+python3 ../../../modules/sim/mcu/mcu_sim_wrap.py ../../../modules/rtl/mcu/mcu.vhd mcu_sim.vhd
 
 # the synthesis source list, with behavioural VHDL models of fifo.v / dpram.v
 # (ISim cannot elaborate them from VHDL with open ports), mcu.vhd with 'out' in place of the
 # 'buffer' ports (ISim leaves those undriven towards verilog), and no hdmi
 {
-	echo 'vhdl work "../fifo_sim.vhd"'
-	echo 'vhdl work "../dpram_sim.vhd"'
+	echo 'vhdl work "../../../modules/sim/mcu/fifo_sim.vhd"'
+	echo 'vhdl work "../../../modules/sim/mcu/dpram_sim.vhd"'
 	echo 'verilog work "../zhdmi_top_stub.v"'
 	grep -v -e 'modules/rtl/mem/fifo.v' -e 'modules/rtl/mem/dpram.v' -e 'modules/rtl/video/hdmi/' ../../karabas_minig.prj | sed -e 's|"../modules/rtl/mcu/mcu.vhd"|"mcu_sim.vhd"|' -e 's|"rtl/|"../../rtl/|' -e 's|"../modules/|"../../../modules/|'
 	echo 'verilog work "../tb_minig.v"'
