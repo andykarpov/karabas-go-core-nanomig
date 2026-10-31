@@ -49,21 +49,22 @@ HD floppies, the serial and parallel ports.
 
 ## OSD menu
 
-**Menu+Esc** opens and closes the menu (on a joystick: Start+C). The items:
+**Menu+Esc** opens and closes the menu (on a joystick: Start+C). The main page has DF0 and DF1 and the sub-menus **Drives ►** and **System ►**: Enter or Right opens one, Esc goes back. The hotkeys work from any page. The sub-menus need the board firmware [v26103113](https://github.com/andykarpov/karabas-go-firmware/releases/tag/v26103113) or later; an older firmware shows all items in one list. The items:
 
-| Item | Values | Hotkey |
-|---|---|---|
-| DF0 ... DF3 | ADF image of the floppy drive | Menu+F1 ... Menu+F4 |
-| HDD0 | Off / CF card / HDF0: what IDE device 0 (master) is | |
-| HDF0 | HDF image of IDE device 0 (with HDD0 = HDF0) | Menu+F5 |
-| HDF1 | HDF image of IDE device 1 (slave) | Menu+F6 |
-| Kickstart | Kickstart ROM file | |
-| Chipset | OCS-A500 / OCS-A1000 / ECS | |
-| Chip RAM | 512K / 1M / 1.5M / 2M | |
-| Slow RAM | None / 512K / 1M / 1.5M | |
-| Fast RAM | None / 2M / 4M / 8M | |
-| Video | PAL / NTSC | |
-| Reset | resets the Amiga | Ctrl+Alt+Del |
+| Item | Page | Values | Hotkey |
+|---|---|---|---|
+| DF0, DF1 | main | ADF image of the floppy drive | Menu+F1, Menu+F2 |
+| DF2, DF3 | Drives | ADF image of the floppy drive | Menu+F3, Menu+F4 |
+| HDD0 | Drives | Off / CF card / HDF0: what IDE device 0 (master) is | |
+| HDF0 | Drives | HDF image of IDE device 0 (grey unless HDD0 = HDF0) | Menu+F5 |
+| HDF1 | Drives | HDF image of IDE device 1 (slave) | Menu+F6 |
+| Kickstart | System | Kickstart ROM file | |
+| Chipset | System | OCS-A500 / OCS-A1000 / ECS | |
+| Chip RAM | System | 512K / 1M / 1.5M / 2M | |
+| Slow RAM | System | None / 512K / 1M / 1.5M | |
+| Fast RAM | System | None / 2M / 4M / 8M | |
+| Video | System | PAL / NTSC | |
+| Reset | System | resets the Amiga | Ctrl+Alt+Del |
 
 - The defaults are those of an A500 with the A501 expansion: OCS-A500, 512 KB Chip RAM, 512 KB Slow
   RAM, no Fast RAM, PAL, HDD0 = CF card.

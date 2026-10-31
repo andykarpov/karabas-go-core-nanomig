@@ -48,21 +48,22 @@ IPF / SCP, дискет HD, последовательного и паралле
 
 ## Меню OSD
 
-**Menu+Esc** открывает и закрывает меню (на джойстике: Start+C). Пункты:
+**Menu+Esc** открывает и закрывает меню (на джойстике: Start+C). На главной странице — DF0, DF1 и подменю **Drives ►** и **System ►**: Enter или Right открывают подменю, Esc возвращает назад. Горячие клавиши работают с любой страницы. Для подменю нужна прошивка платы [v26103113](https://github.com/andykarpov/karabas-go-firmware/releases/tag/v26103113) или новее; старая прошивка показывает все пункты одним списком. Пункты:
 
-| Пункт | Значения | Горячая клавиша |
-|---|---|---|
-| DF0 ... DF3 | образ ADF дисковода | Menu+F1 ... Menu+F4 |
-| HDD0 | Off / CF card / HDF0: что является IDE-устройством 0 (master) | |
-| HDF0 | образ HDF IDE-устройства 0 (при HDD0 = HDF0) | Menu+F5 |
-| HDF1 | образ HDF IDE-устройства 1 (slave) | Menu+F6 |
-| Kickstart | файл ПЗУ Kickstart | |
-| Chipset | OCS-A500 / OCS-A1000 / ECS | |
-| Chip RAM | 512K / 1M / 1.5M / 2M | |
-| Slow RAM | None / 512K / 1M / 1.5M | |
-| Fast RAM | None / 2M / 4M / 8M | |
-| Video | PAL / NTSC | |
-| Reset | сброс Amiga | Ctrl+Alt+Del |
+| Пункт | Страница | Значения | Горячая клавиша |
+|---|---|---|---|
+| DF0, DF1 | главная | образ ADF дисковода | Menu+F1, Menu+F2 |
+| DF2, DF3 | Drives | образ ADF дисковода | Menu+F3, Menu+F4 |
+| HDD0 | Drives | Off / CF card / HDF0: что является IDE-устройством 0 (master) | |
+| HDF0 | Drives | образ HDF IDE-устройства 0 (серый, если HDD0 ≠ HDF0) | Menu+F5 |
+| HDF1 | Drives | образ HDF IDE-устройства 1 (slave) | Menu+F6 |
+| Kickstart | System | файл ПЗУ Kickstart | |
+| Chipset | System | OCS-A500 / OCS-A1000 / ECS | |
+| Chip RAM | System | 512K / 1M / 1.5M / 2M | |
+| Slow RAM | System | None / 512K / 1M / 1.5M | |
+| Fast RAM | System | None / 2M / 4M / 8M | |
+| Video | System | PAL / NTSC | |
+| Reset | System | сброс Amiga | Ctrl+Alt+Del |
 
 - По умолчанию — A500 с расширением A501: OCS-A500, 512 КБ Chip RAM, 512 КБ Slow RAM, без Fast RAM,
   PAL, HDD0 = CF card.
