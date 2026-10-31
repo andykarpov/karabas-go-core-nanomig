@@ -12,17 +12,20 @@
     "osd": [
         {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1", "physical": 1},
         {"type": "F", "name": "DF1", "slot": 1, "extensions": ".adf", "hotkey": "Menu+F2", "physical": 1},
-        {"type": "F", "name": "DF2", "slot": 2, "extensions": ".adf", "hotkey": "Menu+F3", "physical": 1},
-        {"type": "F", "name": "DF3", "slot": 3, "extensions": ".adf", "hotkey": "Menu+F4", "physical": 1},
-        {"type": "S", "name": "HDD0", "options": ["Off", "CF card", "HDF0"], "default": 1},
-        {"type": "F", "name": "HDF0", "slot": 4, "extensions": ".hdf", "hotkey": "Menu+F5"},
-        {"type": "F", "name": "HDF1", "slot": 5, "extensions": ".hdf", "hotkey": "Menu+F6"},
-        {"type": "FL", "name": "Kickstart", "slot": 7, "extensions": ".rom", "dir": "/amiga", "filename": "kick.rom", "autoload": 1},
-        {"type": "S", "name": "Chipset", "options": ["OCS-A500", "OCS-A1000", "ECS"], "default": 0},
-        {"type": "S", "name": "Chip RAM", "options": ["512K", "1M", "1.5M", "2M"], "default": 0},
-        {"type": "S", "name": "Slow RAM", "options": ["None", "512K", "1M", "1.5M"], "default": 1},
-        {"type": "S", "name": "Fast RAM", "options": ["None", "2M", "4M", "8M"], "default": 0},
-        {"type": "S", "name": "Video", "options": ["PAL", "NTSC"], "default": 0},
-        {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}
+        {"type": "F", "name": "DF2", "slot": 2, "extensions": ".adf", "hotkey": "Menu+F3", "physical": 1, "page": 1},
+        {"type": "F", "name": "DF3", "slot": 3, "extensions": ".adf", "hotkey": "Menu+F4", "physical": 1, "page": 1},
+        {"type": "S", "name": "HDD0", "options": ["Off", "CF card", "HDF0"], "default": 1, "page": 1},
+        {"type": "F", "name": "HDF0", "slot": 4, "extensions": ".hdf", "hotkey": "Menu+F5", "page": 1, "enable_if": {"item": "HDD0", "value": "HDF0"}},
+        {"type": "F", "name": "HDF1", "slot": 5, "extensions": ".hdf", "hotkey": "Menu+F6", "page": 1},
+        {"type": "FL", "name": "Kickstart", "slot": 7, "extensions": ".rom", "dir": "/amiga", "filename": "kick.rom", "autoload": 1, "page": 2},
+        {"type": "S", "name": "Chipset", "options": ["OCS-A500", "OCS-A1000", "ECS"], "default": 0, "page": 2},
+        {"type": "S", "name": "Chip RAM", "options": ["512K", "1M", "1.5M", "2M"], "default": 0, "page": 2},
+        {"type": "S", "name": "Slow RAM", "options": ["None", "512K", "1M", "1.5M"], "default": 1, "page": 2},
+        {"type": "S", "name": "Fast RAM", "options": ["None", "2M", "4M", "8M"], "default": 0, "page": 2},
+        {"type": "S", "name": "Video", "options": ["PAL", "NTSC"], "default": 0, "page": 2},
+        {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del", "page": 2},
+        {"type": "-"},
+        {"type": "M", "name": "Drives", "open": 1},
+        {"type": "M", "name": "System", "open": 2}
     ]
 }
