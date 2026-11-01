@@ -124,7 +124,9 @@ module paula #(
 	input	  [7:0] floppy_ext,	// DFn: [2n+1:2n] = 0 image, 1 drive DS0, 2 drive DS1
 	input	  [3:0] floppy_ext_chg,	// one clock: DFn was chosen again (disk change)
 	input	  [3:0] fdd_in,		// { rdata, wprt, tr00, index }, high = active
-	output	  [7:0] fdd_out		// { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
+	output	  [7:0] fdd_out,		// { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
+	output	  [2:0] fdd_chng_req,	// DSKCHG request { one clock, drive } (kg_mcu CMD_FDD_CHNG)
+	input	  [4:0] fdd_chng_in		// its answer { one clock, drive, value }
 );
 //--------------------------------------------------------------------------------------
 
@@ -295,7 +297,9 @@ paula_floppy #(.FLOPPY_EXT(FLOPPY_EXT)) pf1
 	.floppy_ext(floppy_ext),
 	.floppy_ext_chg(floppy_ext_chg),
 	.fdd_in(fdd_in),
-	.fdd_out(fdd_out)
+	.fdd_out(fdd_out),
+	.fdd_chng_req(fdd_chng_req),
+	.fdd_chng_in(fdd_chng_in)
 );
 
 //instantiate audio controller

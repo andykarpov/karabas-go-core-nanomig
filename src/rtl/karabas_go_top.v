@@ -219,6 +219,11 @@ wire [7:0] kb_status, kb_dat0, kb_dat1, kb_dat2, kb_dat3, kb_dat4, kb_dat5;
 wire [7:0] ms_x, ms_y;
 wire [7:0] img_mounted;
 wire img_phys_wr;
+// DSKCHG of the floppy connector (pin 34 hotfix to the RP2040): paula_floppy_ext asks the firmware
+// for the level of the drive it selects (kg_mcu CMD_FDD_CHNG)
+wire [2:0] fdd_chng_req;       // { one clock, drive 1 DS0 / 2 DS1 }
+wire fdd_chng_wr;
+wire [15:0] fdd_chng;          // { drive, value }
 wire [15:0] img_phys;
 wire [63:0] img_size;
 wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
@@ -243,7 +248,7 @@ assign MCU_IO[3:2] = 2'bzz;
 // mcu chip selects: kg_mcu lets a low through at once and a high only after 3 clocks high
 // (CS_FILTER). A short spike on a chip select (the sram outputs switch next to them all the
 // time) reset the spi receivers in the middle of a frame: the frame got lost in both directions.
-kg_mcu #(.BURST_MAX_MHZ(0), .CS_FILTER(3), .ENABLE_IMG(1)) mcu(
+kg_mcu #(.BURST_MAX_MHZ(0), .CS_FILTER(3), .ENABLE_IMG(1), .ENABLE_FDD_CHNG(1)) mcu(
 	.CLK(clk_sys),
 	.N_RESET(~areset),
 
@@ -319,6 +324,10 @@ kg_mcu #(.BURST_MAX_MHZ(0), .CS_FILTER(3), .ENABLE_IMG(1)) mcu(
 	.IMG_Q_ACK(img_q_ack),
 	.IMG_PHYS_WR(img_phys_wr),
 	.IMG_PHYS(img_phys),
+	.FDD_CHNG_REQ(fdd_chng_req[2]),
+	.FDD_CHNG_DS(fdd_chng_req[1:0]),
+	.FDD_CHNG_WR(fdd_chng_wr),
+	.FDD_CHNG(fdd_chng),
 
 	.HWID(),
 	.DVI_ONLY(dvi_only),
@@ -531,6 +540,8 @@ nanomig #(.FLOPPY_EXT(1)) nanomig(
 	.floppy_ext_chg(floppy_ext_chg),
 	.fdd_in({ FDC_RDATA, FDC_WPRT, FDC_TR00, FDC_INDEX }),
 	.fdd_out(fdd_out),
+	.fdd_chng_req(fdd_chng_req),
+	.fdd_chng_in({ fdd_chng_wr, fdd_chng[9:8], fdd_chng[1:0] }),
 	.video_config(video_config),
 	.ide_config(ide_config),
 

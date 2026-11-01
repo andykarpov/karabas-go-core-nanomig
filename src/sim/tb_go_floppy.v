@@ -7,7 +7,9 @@
 // fdd_model.v (no disk, on cylinder 1) is on the FDC pins of DS1.
 // Checks: the slot map and its change event, the drive count, the pins (DS1 only, motor, one step
 // pulse with DIR = out), and the PRA bits: not ready (motor just on), not track 0 / track 0 after
-// the step, write protected (no disk), disk changed.
+// the step, write protected (no disk), disk changed. The mcu polls after init done and answers the
+// DSKCHG requests of the core (CMD_FDD_CHNG 49 d 00) with DSKCHG of the model: the request comes
+// over the link with DS1 selected and the answer turns the line on.
 // Ends with "tb_go_floppy: N errors".
 
 module tb_go_floppy;
@@ -130,6 +132,7 @@ assign mcu_io[1] = 1'b1; // burst cs_n
 assign mcu_io[2] = 1'b1; // sd2 cs_n
 assign mcu_io[3] = 1'b1; // ft cs_n
 
+reg [7:0] rx_b;
 task spi_byte(input [7:0] b);
 	integer k;
 	begin
@@ -137,19 +140,21 @@ task spi_byte(input [7:0] b);
 			mcu_mosi = b[k];
 			#31;
 			mcu_sck = 1'b1;
+			rx_b = { rx_b[6:0], mcu_miso };
 			#31;
 			mcu_sck = 1'b0;
 		end
 	end
 endtask
 
+reg [7:0] rx_c, rx_a, rx_d;          // the reply word of the last frame
 task frame(input [7:0] c, input [7:0] a, input [7:0] d);
 	begin
 		mcu_cs_n = 1'b0;
 		#100;
-		spi_byte(c);
-		spi_byte(a);
-		spi_byte(d);
+		spi_byte(c); rx_c = rx_b;
+		spi_byte(a); rx_a = rx_b;
+		spi_byte(d); rx_d = rx_b;
 		#50;
 		mcu_cs_n = 1'b1;
 		#500;
@@ -165,7 +170,7 @@ wire [15:0] cf_bus;
 wire [15:0] sdr_dq;
 wire [1:0] fdc_drive;
 wire fdc_motor, fdc_dir, fdc_step, fdc_wdata, fdc_wgate, fdc_side_n;
-wire fdc_index, fdc_tr00, fdc_wprt, fdc_rdata;
+wire fdc_index, fdc_tr00, fdc_wprt, fdc_rdata, fdc_dskchg;
 
 karabas_go_top #(.RESET_DELAY(16'd256)) dut(
 	.CLK_50MHZ(clk50),
@@ -209,7 +214,7 @@ assign sdr_dq = 16'hzzzz;
 fdd_model drive(
 	.ds(fdc_drive[1]), .motor(fdc_motor), .dir(fdc_dir), .step(fdc_step), .side1(fdc_side_n),
 	.wgate(fdc_wgate), .wdata(fdc_wdata),
-	.index(fdc_index), .tr00(fdc_tr00), .wprt(fdc_wprt), .rdata(fdc_rdata)
+	.index(fdc_index), .tr00(fdc_tr00), .wprt(fdc_wprt), .rdata(fdc_rdata), .dskchg(fdc_dskchg)
 );
 
 integer errors = 0;
@@ -253,6 +258,7 @@ always @(posedge dut.clk_sys)
 		$display("%t COLOR00 written: the program got to its end", $time);
 	end
 
+integer n_ask = 0;
 integer n_chg = 0, n_step = 0, n_ds0 = 0, n_ds1 = 0, step_dir_in = 0;
 always @(posedge dut.clk_sys) if (dut.floppy_ext_chg != 4'd0) begin
 	n_chg = n_chg + 1;
@@ -280,8 +286,22 @@ initial begin
 	check("change events", n_chg, 1);
 	frame(8'hFE, 8'h00, 8'h00);   // init done -> reset released
 	$display("%t init done", $time);
+	// the main loop of the firmware: polls, and answers a DSKCHG request with GPIO28
 	w = 0;
-	while (!done && w < 4000) begin #1000; w = w + 1; end
+	while (!done && w < 4000) begin
+		frame(8'hFF, 8'h00, 8'h00);
+		if (rx_c == 8'h49 && rx_d == 8'h00) begin
+			n_ask = n_ask + 1;
+			if (rx_a != 8'h02 || !fdc_drive[1] || fdc_drive[0]) begin
+				errors = errors + 1;
+				$display("%t ERROR DSKCHG request %02x %02x %02x, DS %b", $time, rx_c, rx_a, rx_d, fdc_drive);
+			end
+			#20000;
+			frame(8'h49, rx_a, { 7'd0, fdc_dskchg });
+		end
+		#1000;
+		w = w + 1;
+	end
 	check("program done", done, 1'b1);
 	check("drives - 1", dut.drives, 2'd1);
 	check("PRA after the select: _RDY _TK0 _WPRO _CHNG", sram_hi[21'h100000] & 8'h3C, 8'h30);
@@ -293,6 +313,8 @@ initial begin
 	check("step pulses with DIR = in", step_dir_in, 0);
 	check("drive on cylinder 0", drive.cyl, 0);
 	check("DIR setup", drive.dir_err, 0);
+	check("DSKCHG requests", n_ask > 0, 1'b1);
+	check("DSKCHG line on", dut.nanomig.minimig.PAULA1.pf1.paula_floppy_ext_on.ext.line_on, 1'b1);
 	$display("tb_go_floppy: %0d errors", errors);
 	$finish;
 end

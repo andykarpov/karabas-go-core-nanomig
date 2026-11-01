@@ -18,6 +18,13 @@
 // cylinder 0 head 0, no sdc request; a track dma write on head 1 and its read back; write protect;
 // an OSD change event (_CHNG low, found again); the disk taken out with the motor on (_CHNG low,
 // _RDY high); DF0 from the ADF still reads.
+// FW = 0: a firmware without CMD_FDD_CHNG (no answers: three timeouts after the reset turn the
+// requests off, then the checks above). FW = 1: the DSKCHG hotfix (the model has DSKCHG, a
+// firmware model answers each request after FW_DELAY with the level then): _CHNG follows the
+// line, no probe ever spins the motor, a disk put in is seen after the step that clears DSKCHG,
+// an OSD event keeps _CHNG low until a step, a disk taken out with the motor off is seen at the
+// next look of the Amiga, and each request keeps its drive (and no other one) selected until the
+// answer.
 // Ends with "tb_phys_floppy: N errors".
 
 module tb_phys_floppy;
@@ -27,6 +34,8 @@ parameter DMA_INTERVAL = 600;
 parameter SPEED_PPM = 15000;
 parameter JITTER = 200;
 parameter NWWORDS = 6056;
+parameter FW = 0;
+parameter FW_DELAY = 400000;     // ns from a request to the answer
 
 reg clk = 1'b0;
 always #17.65 clk = ~clk;
@@ -47,6 +56,8 @@ reg [3:0] _sel = 4'b1111;
 reg _motor = 1'b1, _step = 1'b1, direc = 1'b0, side = 1'b1;
 wire _track0, _change, _ready, _wprot, index;
 
+wire [2:0] chng_req;
+reg [4:0] chng_in = 5'd0;
 reg [7:0] floppy_ext = 8'd0;
 reg [3:0] floppy_ext_chg = 4'd0;
 wire [7:0] fdd_out;
@@ -72,22 +83,47 @@ paula_floppy #(.FLOPPY_EXT(1)) dut(
 	.sdc_byte_in_strobe(sdc_strobe), .sdc_byte_addr(sdc_addr), .sdc_byte_in_data(sdc_data),
 	.sdc_byte_out_data(),
 	.precomp(2'b00), .floppy_ext(floppy_ext), .floppy_ext_chg(floppy_ext_chg),
-	.fdd_in(fdd_in), .fdd_out(fdd_out)
+	.fdd_in(fdd_in), .fdd_out(fdd_out), .fdd_chng_req(chng_req), .fdd_chng_in(chng_in)
 );
 // shorter than on the board: spin-up 100 ms, probe 700 ms (no index: 400 ms as on the board)
 defparam dut.paula_floppy_ext_on.ext.SPINUP = 13'd692;
 defparam dut.paula_floppy_ext_on.ext.PROBE = 13'd4840;
+// FW = 0: the three timeouts are over in 1 ms
+defparam dut.paula_floppy_ext_on.ext.ANSWER = (FW == 0) ? 9'd2 : 9'd346;
 
 wire f_wdata = fdd_out[7], f_wgate = fdd_out[6], f_side1 = fdd_out[5], f_step = fdd_out[4];
 wire f_dir = fdd_out[3], f_motor = fdd_out[2], f_ds1 = fdd_out[1], f_ds0 = fdd_out[0];
 
 // DS1 has the drive, DS0 nothing: the inputs are the outputs of the selected drive (wired-or)
-wire d_index, d_tr00, d_wprt, d_rdata;
+wire d_index, d_tr00, d_wprt, d_rdata, d_dskchg;
 fdd_model #(.SPEED_PPM(SPEED_PPM), .JITTER(JITTER)) drive(
 	.ds(f_ds1), .motor(f_motor), .dir(f_dir), .step(f_step), .side1(f_side1),
 	.wgate(f_wgate), .wdata(f_wdata),
-	.index(d_index), .tr00(d_tr00), .wprt(d_wprt), .rdata(d_rdata)
+	.index(d_index), .tr00(d_tr00), .wprt(d_wprt), .rdata(d_rdata), .dskchg(d_dskchg)
 );
+
+// the firmware: answers 49 d 00 with GPIO28 (DSKCHG of the selected drives) FW_DELAY later
+integer nask = 0, nans = 0, nask_bad = 0;
+reg [1:0] ask_d = 2'd0;
+always @(posedge clk) begin
+	if (chng_req[2]) begin
+		nask = nask + 1;
+		ask_d = chng_req[1:0];
+	end
+end
+initial begin
+	forever begin
+		wait (nask > nans);
+		nans = nans + 1;
+		#(FW_DELAY);
+		// the core keeps the drive selected until the answer, and no other one
+		if (!(ask_d == 2'd2 ? f_ds1 : f_ds0) || (ask_d == 2'd2 ? f_ds0 : f_ds1)) nask_bad = nask_bad + 1;
+		if (FW == 1) begin
+			@(posedge clk) chng_in <= { 1'b1, ask_d, 1'b0, d_dskchg };
+			@(posedge clk) chng_in <= 5'd0;
+		end
+	end
+end
 assign fdd_in = { d_rdata, d_wprt, d_tr00, d_index };
 
 integer errors = 0;
@@ -329,7 +365,9 @@ endtask
 
 // ---------------- the test ----------------
 
-integer steps0, n, nbyt, nclr, bval;
+integer steps0, n, nbyt, nclr, bval, nmotor0;
+integer nmotor = 0;
+always @(posedge f_motor) nmotor = nmotor + 1;
 reg probed;
 initial begin
 	#1000;
@@ -344,6 +382,11 @@ initial begin
 	@(posedge clk) begin floppy_ext <= 8'b0000_1000; floppy_ext_chg <= 4'b0010; end
 	@(posedge clk) floppy_ext_chg <= 4'b0000;
 	#10000;
+	wait_ms(2);
+	if (FW == 0)
+		check(dut.paula_floppy_ext_on.ext.line_off && !dut.paula_floppy_ext_on.ext.line_on, "no answers: requests not off");
+	else
+		check(dut.paula_floppy_ext_on.ext.line_on && nask == 1, "line: not on after the first answer");
 
 	// drive ID: _RDY low with the motor off, _CHNG low (no disk yet)
 	select(1, 0);
@@ -361,35 +404,59 @@ initial begin
 	deselect;
 	check(drive.nsteps == steps0, "DF0 steps reached the drive");
 
-	// no disk: a step of DF1 starts a probe that finds nothing
+	if (FW == 0) begin
+		// no disk: a step of DF1 starts a probe that finds nothing
+		select(1, 0);
+		step(1'b1);
+		deselect;
+		#1000000;
+		check(f_motor && f_ds1, "no probe after a step without a disk");
+		wait_ms(750);
+		check(!f_motor && !f_ds1, "probe not over");
+		select(1, 0);
+		check(_change == 1'b0, "no disk: _CHNG not low");
+		deselect;
+
+		// a disk put in: found by the probe after the next step, the step after that clears _CHNG
+		drive.disk_in = 1'b1;
+		select(1, 0);
+		step(1'b1);
+		deselect;
+		probed = 1'b0;
+		for (n = 0; n < 800 && !probed; n = n + 1) begin
+			#1000000;
+			probed = !f_motor;
+		end
+		$display("%t probe found the disk after %0d ms", $time, n);
+		check(dut.paula_floppy_ext_on.ext.present[1] == 1'b1, "probe: disk not found");
+		select(1, 0);
+		check(_change == 1'b0, "_CHNG cleared without a step");
+		step(1'b1);
+		check(_change == 1'b1, "disk in, step: _CHNG still low");
+		deselect;
+	end else begin
+	// no disk: a step of DF1 asks the drive (DSKCHG 1), no probe
 	select(1, 0);
 	step(1'b1);
 	deselect;
-	#1000000;
-	check(f_motor && f_ds1, "no probe after a step without a disk");
-	wait_ms(750);
-	check(!f_motor && !f_ds1, "probe not over");
+	wait_ms(2);
+	check(!f_motor && !f_ds1, "line: motor or DS1 on after a step without a disk");
 	select(1, 0);
-	check(_change == 1'b0, "no disk: _CHNG not low");
+	check(_change == 1'b0, "line, no disk: _CHNG not low");
 	deselect;
 
-	// a disk put in: found by the probe after the next step, the step after that clears _CHNG
+	// a disk put in: the step clears DSKCHG of the drive, the answer after it _CHNG
 	drive.disk_in = 1'b1;
 	select(1, 0);
 	step(1'b1);
 	deselect;
-	probed = 1'b0;
-	for (n = 0; n < 800 && !probed; n = n + 1) begin
-		#1000000;
-		probed = !f_motor;
-	end
-	$display("%t probe found the disk after %0d ms", $time, n);
-	check(dut.paula_floppy_ext_on.ext.present[1] == 1'b1, "probe: disk not found");
+	wait_ms(2);
 	select(1, 0);
-	check(_change == 1'b0, "_CHNG cleared without a step");
-	step(1'b1);
-	check(_change == 1'b1, "disk in, step: _CHNG still low");
+	check(_change == 1'b1, "line, disk in, step: _CHNG still low");
+	check(dut.paula_floppy_ext_on.ext.present[1] == 1'b1, "line: disk not seen");
 	deselect;
+	check(nmotor == 0, "line: the motor ran (a probe)");
+	end
 
 	// seek to cylinder 0 (from 3): DIR changes with the first step
 	select(1, 0);
@@ -460,23 +527,61 @@ initial begin
 	drive.wp = 1'b0;
 	deselect;
 
-	// OSD event (the drive chosen again): _CHNG low, the disk is found again
+	if (FW == 0) begin
+		// OSD event (the drive chosen again): _CHNG low, the disk is found again
+		floppy_ext_chg = 4'b0010;
+		#1000;
+		floppy_ext_chg = 4'b0000;
+		select(1, 0);
+		check(_change == 1'b0, "OSD change: _CHNG not low");
+		step(1'b0);
+		deselect;
+		probed = 1'b0;
+		for (n = 0; n < 800 && !probed; n = n + 1) begin
+			#1000000;
+			probed = !f_motor;
+		end
+		select(1, 0);
+		step(1'b1);
+		check(_change == 1'b1, "OSD change: _CHNG still low after the probe and a step");
+		deselect;
+	end else begin
+	// OSD event: _CHNG low until a step, then the answer (disk in) clears it, no probe
+	nmotor0 = nmotor;
 	floppy_ext_chg = 4'b0010;
 	#1000;
 	floppy_ext_chg = 4'b0000;
+	wait_ms(2);
 	select(1, 0);
-	check(_change == 1'b0, "OSD change: _CHNG not low");
+	check(_change == 1'b0, "line, OSD change: _CHNG not low");
 	step(1'b0);
 	deselect;
-	probed = 1'b0;
-	for (n = 0; n < 800 && !probed; n = n + 1) begin
-		#1000000;
-		probed = !f_motor;
-	end
+	wait_ms(2);
+	select(1, 0);
+	check(_change == 1'b1, "line, OSD change: _CHNG still low after a step");
+	deselect;
+
+	// the disk taken out with the motor off: seen when the Amiga looks again (RECHECK after the
+	// last answer)
+	drive.disk_in = 1'b0;
+	wait_ms(600);
+	select(1, 0);
+	deselect;
+	wait_ms(2);
+	select(1, 0);
+	check(_change == 1'b0, "line, disk out, motor off: _CHNG not low");
+	deselect;
+	check(nmotor == nmotor0, "line: the motor ran (a probe)");
+	// and in again
+	drive.disk_in = 1'b1;
 	select(1, 0);
 	step(1'b1);
-	check(_change == 1'b1, "OSD change: _CHNG still low after the probe and a step");
 	deselect;
+	wait_ms(2);
+	select(1, 0);
+	check(_change == 1'b1, "line, disk in again: _CHNG still low");
+	deselect;
+	end
 
 	// the disk taken out with the motor on: _CHNG low after two turns without an index
 	select(1, 1);
@@ -501,6 +606,8 @@ initial begin
 
 	$display("drive: %0d steps, %0d with DIR setup < 1 us", drive.nsteps, drive.dir_err);
 	check(drive.dir_err == 0, "DIR setup");
+	$display("DSKCHG: %0d requests, %0d answered (FW %0d), %0d without their drive selected", nask, nans, FW, nask_bad);
+	if (FW == 1) check(nask_bad == 0, "line: a request without its drive selected until the answer");
 	$display("tb_phys_floppy: %0d errors", errors);
 	$finish;
 end

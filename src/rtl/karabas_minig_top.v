@@ -474,6 +474,8 @@ nanomig nanomig(
 	.floppy_ext_chg(4'd0),
 	.fdd_in(4'd0),
 	.fdd_out(),
+	.fdd_chng_req(),
+	.fdd_chng_in(5'd0),
 	.video_config(video_config),
 	.ide_config(ide_config),
 
