@@ -205,6 +205,7 @@ wire        ext_wr;		// ext_rx is new (one clk7_en cycle)
 wire        ext_rd;		// the PLL took fifo_out to write it
 wire        ext_rd_del;		// the PLL has written its last word
 wire        ext_sync;		// ext_rx is the sync word
+wire [31:0] ext_dbg;		// DSKCHG state of paula_floppy_ext (debug log)
 wire [7:0]  ext_byte;		// DSKBYTR data
 wire        ext_byte_rdy, ext_sync_now;
 reg         ext_byte_clr = 1'b0;
@@ -230,7 +231,7 @@ paula_floppy_ext ext
 	.fdd_out(fdd_out),
 	.chng_req(fdd_chng_req),
 	.chng_in(fdd_chng_in),
-	.dbg(fdd_dbg),
+	.dbg(ext_dbg),
 	.ext_drv(ext_drv),
 	.ext_sel(ext_sel),
 	._change_v(ext_change_v),
@@ -275,7 +276,7 @@ end else begin : paula_floppy_ext_off
 // no physical drives: the ext_* signals are constants and the muxes below fold away
 assign fdd_out = 8'd0;
 assign fdd_chng_req = 3'd0;
-assign fdd_dbg = 32'd0;
+assign ext_dbg = 32'd0;
 assign ext_drv = 4'd0;
 assign ext_sel = 1'b0;
 assign ext_change_v = 4'b1111;
@@ -1196,6 +1197,51 @@ always @(*) begin
 	endcase
 end
 
+
+// karabas: debug log of the physical floppy (DEBUG_ADDR / DEBUG_DATA of kg_mcu, firmware log with
+// debug=1). DBG_DMA 0: the DSKCHG state of paula_floppy_ext. DBG_DMA 1: a snapshot at the end of
+// each disk dma of a physical drive:
+//   DEBUG_ADDR { write, head, cylinder (7), sync words seen by the PLL during the dma (7, max 127) }
+//   DEBUG_DATA { sequence (4), read: the last revolution of the selected drive in 1024 clk7
+//                (144.6 us; 1383 = 200 ms = 300 rpm), write: WDATA pulses / 16 (12) }
+localparam DBG_DMA = 1;
+reg  [9:0] dbg_pre = 10'd0;
+reg [11:0] dbg_rev_cnt = 12'd0, dbg_rev = 12'd0;
+reg  [6:0] dbg_sync = 7'd0;
+reg [15:0] dbg_wpulse = 16'd0;
+reg        dbg_dma_d = 1'b0, dbg_ext = 1'b0, dbg_wr = 1'b0, dbg_wd_d = 1'b1;
+reg  [3:0] dbg_seq = 4'd0;
+reg [31:0] dbg_snap = 32'd0;
+always @(posedge clk) begin
+	if (clk7_en) begin
+		dbg_pre <= dbg_pre + 10'd1;
+		if (ext_index) begin
+			dbg_rev <= dbg_rev_cnt;
+			dbg_rev_cnt <= 12'd0;
+		end else if (&dbg_pre && !(&dbg_rev_cnt))
+			dbg_rev_cnt <= dbg_rev_cnt + 12'd1;
+
+		dbg_dma_d <= dmaen;
+		dbg_wd_d <= ext_wd;
+		if (dmaen && !dbg_dma_d) begin
+			dbg_sync <= 7'd0;
+			dbg_wpulse <= 16'd0;
+			dbg_ext <= ext_sel;
+			dbg_wr <= dsklen[14];
+		end else if (dmaen) begin
+			if (ext_wr && ext_sync && trackrd && !(&dbg_sync))
+				dbg_sync <= dbg_sync + 7'd1;
+			if (!ext_wd && dbg_wd_d && !ext_wg && !(&dbg_wpulse))
+				dbg_wpulse <= dbg_wpulse + 16'd1;
+		end
+		if (!dmaen && dbg_dma_d && dbg_ext) begin
+			dbg_seq <= dbg_seq + 4'd1;
+			dbg_snap <= { dbg_wr, ~side, dsktrack[sel], dbg_sync,
+				dbg_seq + 4'd1, dbg_wr ? dbg_wpulse[15:4] : dbg_rev };
+		end
+	end
+end
+assign fdd_dbg = DBG_DMA ? dbg_snap : ext_dbg;
 
 endmodule
 
