@@ -1200,17 +1200,15 @@ end
 
 // karabas: debug log of the physical floppy (DEBUG_ADDR / DEBUG_DATA of kg_mcu, firmware log with
 // debug=1). DBG_DMA 0: the DSKCHG state of paula_floppy_ext. DBG_DMA 1: a snapshot at the end of
-// each disk dma of a physical drive:
-//   DEBUG_ADDR { write, head, cylinder (7), sync words seen by the PLL during the dma (7, max 127) }
-//   DEBUG_DATA { sequence (4), read: words of the PLL with an MFM violation ("11" or "0000",
-//                with the 3 bits before the word) after the first sync (8, max 255), words the
-//                fifo had no room for (4, max 15); write: WDATA pulses / 16 (12) }
+// each disk dma of a physical drive. For a read, the words of the PLL (not those of the fifo) are
+// decoded as trackdisk sectors (two sync words, info, label, header and data checksums, 512 bytes):
+//   DEBUG_ADDR { write, head, cylinder (7), sectors with a bad header checksum (4), sectors with a
+//                good header of another track (3) }
+//   DEBUG_DATA { sequence (4), read: good sectors (4), sectors with a bad data checksum (4), words
+//                with an MFM violation after the first sync (4); write: WDATA pulses / 16 (12) }
+// All counts stop at their maximum.
 localparam DBG_DMA = 1;
-reg  [9:0] dbg_pre = 10'd0;
-reg [11:0] dbg_rev_cnt = 12'd0, dbg_rev = 12'd0;
-reg  [6:0] dbg_sync = 7'd0;
-reg  [7:0] dbg_viol = 8'd0;
-reg  [3:0] dbg_drop = 4'd0;
+reg  [3:0] dbg_viol = 4'd0;
 reg  [2:0] dbg_prev = 3'd0;
 reg        dbg_synced = 1'b0;
 wire [18:0] dbg_bits = { dbg_prev, ext_rx };
@@ -1220,43 +1218,89 @@ reg [15:0] dbg_wpulse = 16'd0;
 reg        dbg_dma_d = 1'b0, dbg_ext = 1'b0, dbg_wr = 1'b0, dbg_wd_d = 1'b1;
 reg  [3:0] dbg_seq = 4'd0;
 reg [31:0] dbg_snap = 32'd0;
+// sector decoder: the word index after the sync words, the checksums
+reg        sd_on = 1'b0;
+reg  [9:0] sd_i = 10'd0;
+reg [15:0] sd_hx_h = 16'd0, sd_hx_l = 16'd0, sd_dx_h = 16'd0, sd_dx_l = 16'd0;
+reg [31:0] sd_info_o = 32'd0, sd_info_e = 32'd0, sd_hcs_o = 32'd0, sd_hcs_e = 32'd0, sd_dcs_o = 32'd0, sd_dcs_e = 32'd0;
+reg  [3:0] sd_good = 4'd0, sd_dbad = 4'd0, sd_hbad = 4'd0;
+reg  [2:0] sd_trk = 3'd0;
+wire [31:0] sd_info = ((sd_info_o & 32'h55555555) << 1) | (sd_info_e & 32'h55555555);
+wire [31:0] sd_hcs = ((sd_hcs_o & 32'h55555555) << 1) | (sd_hcs_e & 32'h55555555);
+wire [31:0] sd_dcs = ((sd_dcs_o & 32'h55555555) << 1) | (sd_dcs_e & 32'h55555555);
+wire       sd_hok = ({ sd_hx_h, sd_hx_l } & 32'h55555555) == sd_hcs;
+wire [7:0] sd_want = { dsktrack[sel], ~side };
 always @(posedge clk) begin
 	if (clk7_en) begin
-		dbg_pre <= dbg_pre + 10'd1;
-		if (ext_index) begin
-			dbg_rev <= dbg_rev_cnt;
-			dbg_rev_cnt <= 12'd0;
-		end else if (&dbg_pre && !(&dbg_rev_cnt))
-			dbg_rev_cnt <= dbg_rev_cnt + 12'd1;
-
 		dbg_dma_d <= dmaen;
 		dbg_wd_d <= ext_wd;
 		if (dmaen && !dbg_dma_d) begin
-			dbg_sync <= 7'd0;
-			dbg_viol <= 8'd0;
-			dbg_drop <= 4'd0;
+			dbg_viol <= 4'd0;
 			dbg_synced <= 1'b0;
 			dbg_wpulse <= 16'd0;
 			dbg_ext <= ext_sel;
 			dbg_wr <= dsklen[14];
+			sd_on <= 1'b0;
+			sd_good <= 4'd0; sd_dbad <= 4'd0; sd_hbad <= 4'd0; sd_trk <= 3'd0;
 		end else if (dmaen) begin
-			if (ext_wr && ext_sync && trackrd && !(&dbg_sync))
-				dbg_sync <= dbg_sync + 7'd1;
 			if (ext_wr && trackrd) begin
 				dbg_prev <= ext_rx[2:0];
 				if (ext_sync) dbg_synced <= 1'b1;
 				if (dbg_synced && (dbg_11 || dbg_0000) && !(&dbg_viol))
-					dbg_viol <= dbg_viol + 8'd1;
-				if (trackrdok && fifo_full && !lenzero && !(&dbg_drop))
-					dbg_drop <= dbg_drop + 4'd1;
+					dbg_viol <= dbg_viol + 4'd1;
+				if (ext_rx == 16'h4489) begin
+					sd_on <= 1'b1;
+					sd_i <= 10'd0;
+					sd_hx_h <= 16'd0; sd_hx_l <= 16'd0; sd_dx_h <= 16'd0; sd_dx_l <= 16'd0;
+				end else if (sd_on) begin
+					sd_i <= sd_i + 10'd1;
+					if (sd_i < 10'd20) begin
+						if (sd_i[0]) sd_hx_l <= sd_hx_l ^ ext_rx; else sd_hx_h <= sd_hx_h ^ ext_rx;
+					end
+					if (sd_i >= 10'd28) begin
+						if (sd_i[0]) sd_dx_l <= sd_dx_l ^ ext_rx; else sd_dx_h <= sd_dx_h ^ ext_rx;
+					end
+					case (sd_i)
+						10'd0: sd_info_o[31:16] <= ext_rx;
+						10'd1: sd_info_o[15:0] <= ext_rx;
+						10'd2: sd_info_e[31:16] <= ext_rx;
+						10'd3: sd_info_e[15:0] <= ext_rx;
+						10'd20: sd_hcs_o[31:16] <= ext_rx;
+						10'd21: sd_hcs_o[15:0] <= ext_rx;
+						10'd22: sd_hcs_e[31:16] <= ext_rx;
+						10'd23: sd_hcs_e[15:0] <= ext_rx;
+						10'd24: sd_dcs_o[31:16] <= ext_rx;
+						10'd25: sd_dcs_o[15:0] <= ext_rx;
+						10'd26: sd_dcs_e[31:16] <= ext_rx;
+						10'd27: sd_dcs_e[15:0] <= ext_rx;
+						default: ;
+					endcase
+					if (sd_i == 10'd28) begin
+						// the header is complete
+						if (!sd_hok) begin
+							if (!(&sd_hbad)) sd_hbad <= sd_hbad + 4'd1;
+							sd_on <= 1'b0;
+						end else if (sd_info[23:16] != sd_want) begin
+							if (!(&sd_trk)) sd_trk <= sd_trk + 3'd1;
+							sd_on <= 1'b0;
+						end
+					end
+					if (sd_i == 10'd539) begin
+						// the last data word (539, an odd one) goes into sd_dx_l in this clock
+						sd_on <= 1'b0;
+						if ((({ sd_dx_h, sd_dx_l ^ ext_rx }) & 32'h55555555) == sd_dcs) begin
+							if (!(&sd_good)) sd_good <= sd_good + 4'd1;
+						end else if (!(&sd_dbad)) sd_dbad <= sd_dbad + 4'd1;
+					end
+				end
 			end
 			if (!ext_wd && dbg_wd_d && !ext_wg && !(&dbg_wpulse))
 				dbg_wpulse <= dbg_wpulse + 16'd1;
 		end
 		if (!dmaen && dbg_dma_d && dbg_ext) begin
 			dbg_seq <= dbg_seq + 4'd1;
-			dbg_snap <= { dbg_wr, ~side, dsktrack[sel], dbg_sync,
-				dbg_seq + 4'd1, dbg_wr ? dbg_wpulse[15:4] : { dbg_viol, dbg_drop } };
+			dbg_snap <= { dbg_wr, ~side, dsktrack[sel], sd_hbad, sd_trk,
+				dbg_seq + 4'd1, dbg_wr ? dbg_wpulse[15:4] : { sd_good, sd_dbad, dbg_viol } };
 		end
 	end
 end
