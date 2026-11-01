@@ -289,6 +289,9 @@ always @(posedge clk) begin
 			else if (q_cnt == SETTLE) begin
 				chng_req <= { 1'b1, q_k ? 2'd2 : 2'd1 };
 				want[q_k] <= 1'b0;
+				// the age counts from the request: a deselect by the Amiga while the answer is on
+				// its way asks no second time
+				if (q_k) age1 <= 13'd0; else age0 <= 13'd0;
 				q_tmo <= 9'd0;
 				q_state <= Q_WAIT;
 			end else
