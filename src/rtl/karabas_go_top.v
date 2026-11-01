@@ -224,6 +224,7 @@ wire img_phys_wr;
 wire [2:0] fdd_chng_req;       // { one clock, drive 1 DS0 / 2 DS1 }
 wire fdd_chng_wr;
 wire [15:0] fdd_chng;          // { drive, value }
+wire [31:0] fdd_dbg;           // paula_floppy_ext state (DEBUG_ADDR / DEBUG_DATA)
 wire [15:0] img_phys;
 wire [63:0] img_size;
 wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
@@ -248,7 +249,7 @@ assign MCU_IO[3:2] = 2'bzz;
 // mcu chip selects: kg_mcu lets a low through at once and a high only after 3 clocks high
 // (CS_FILTER). A short spike on a chip select (the sram outputs switch next to them all the
 // time) reset the spi receivers in the middle of a frame: the frame got lost in both directions.
-kg_mcu #(.BURST_MAX_MHZ(0), .CS_FILTER(3), .ENABLE_IMG(1), .ENABLE_FDD_CHNG(1)) mcu(
+kg_mcu #(.BURST_MAX_MHZ(0), .CS_FILTER(3), .ENABLE_IMG(1), .ENABLE_FDD_CHNG(1), .ENABLE_DEBUG(1)) mcu(
 	.CLK(clk_sys),
 	.N_RESET(~areset),
 
@@ -293,8 +294,8 @@ kg_mcu #(.BURST_MAX_MHZ(0), .CS_FILTER(3), .ENABLE_IMG(1), .ENABLE_FDD_CHNG(1)) 
 	.UART_DLL(8'h00),
 	.UART_DLM_WR(1'b0),
 	.UART_DLL_WR(1'b0),
-	.DEBUG_ADDR(16'h0000),
-	.DEBUG_DATA(16'h0000),
+	.DEBUG_ADDR(fdd_dbg[31:16]),   // the floppy state (paula_floppy_ext dbg): firmware log with debug=1
+	.DEBUG_DATA(fdd_dbg[15:0]),
 
 	.ROMLOADER_ACTIVE(romloader_act),
 	.ROMLOAD_ADDR(romloader_addr),
@@ -542,6 +543,7 @@ nanomig #(.FLOPPY_EXT(1)) nanomig(
 	.fdd_out(fdd_out),
 	.fdd_chng_req(fdd_chng_req),
 	.fdd_chng_in({ fdd_chng_wr, fdd_chng[9:8], fdd_chng[1:0] }),
+	.fdd_dbg(fdd_dbg),
 	.video_config(video_config),
 	.ide_config(ide_config),
 

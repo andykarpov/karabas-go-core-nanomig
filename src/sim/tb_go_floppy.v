@@ -48,6 +48,7 @@ initial begin
 	//   move.b  $BFE001,$C00000     ; CIA-A PRA
 	//   move.b  #$6E,$BFD100        ; _STEP low (DIR = 1: out)
 	//   move.b  #$6F,$BFD100        ; _STEP high
+	//   move.w  #$40,d0 / dbra d0,*  ; ~50 us: the step reaches the drive (8 us DIR + 8 us pulse)
 	//   move.b  $BFE001,$C00001     ; CIA-A PRA
 	//   move.w  #$0F00,$DFF180      ; COLOR00: done
 	//   bra.s   *
@@ -101,26 +102,34 @@ initial begin
 	sram_hi[21'h1E0080] = 8'h00; sram_lo[21'h1E0080] = 8'hBF;
 	sram_hi[21'h1C0081] = 8'hD1; sram_lo[21'h1C0081] = 8'h00;
 	sram_hi[21'h1E0081] = 8'hD1; sram_lo[21'h1E0081] = 8'h00;
-	sram_hi[21'h1C0082] = 8'h13; sram_lo[21'h1C0082] = 8'hF9;
-	sram_hi[21'h1E0082] = 8'h13; sram_lo[21'h1E0082] = 8'hF9;
-	sram_hi[21'h1C0083] = 8'h00; sram_lo[21'h1C0083] = 8'hBF;
-	sram_hi[21'h1E0083] = 8'h00; sram_lo[21'h1E0083] = 8'hBF;
-	sram_hi[21'h1C0084] = 8'hE0; sram_lo[21'h1C0084] = 8'h01;
-	sram_hi[21'h1E0084] = 8'hE0; sram_lo[21'h1E0084] = 8'h01;
-	sram_hi[21'h1C0085] = 8'h00; sram_lo[21'h1C0085] = 8'hC0;
-	sram_hi[21'h1E0085] = 8'h00; sram_lo[21'h1E0085] = 8'hC0;
-	sram_hi[21'h1C0086] = 8'h00; sram_lo[21'h1C0086] = 8'h01;
-	sram_hi[21'h1E0086] = 8'h00; sram_lo[21'h1E0086] = 8'h01;
-	sram_hi[21'h1C0087] = 8'h33; sram_lo[21'h1C0087] = 8'hFC;
-	sram_hi[21'h1E0087] = 8'h33; sram_lo[21'h1E0087] = 8'hFC;
-	sram_hi[21'h1C0088] = 8'h0F; sram_lo[21'h1C0088] = 8'h00;
-	sram_hi[21'h1E0088] = 8'h0F; sram_lo[21'h1E0088] = 8'h00;
-	sram_hi[21'h1C0089] = 8'h00; sram_lo[21'h1C0089] = 8'hDF;
-	sram_hi[21'h1E0089] = 8'h00; sram_lo[21'h1E0089] = 8'hDF;
-	sram_hi[21'h1C008A] = 8'hF1; sram_lo[21'h1C008A] = 8'h80;
-	sram_hi[21'h1E008A] = 8'hF1; sram_lo[21'h1E008A] = 8'h80;
-	sram_hi[21'h1C008B] = 8'h60; sram_lo[21'h1C008B] = 8'hFE;
-	sram_hi[21'h1E008B] = 8'h60; sram_lo[21'h1E008B] = 8'hFE;
+	sram_hi[21'h1C0082] = 8'h30; sram_lo[21'h1C0082] = 8'h3C;
+	sram_hi[21'h1E0082] = 8'h30; sram_lo[21'h1E0082] = 8'h3C;
+	sram_hi[21'h1C0083] = 8'h00; sram_lo[21'h1C0083] = 8'h40;
+	sram_hi[21'h1E0083] = 8'h00; sram_lo[21'h1E0083] = 8'h40;
+	sram_hi[21'h1C0084] = 8'h51; sram_lo[21'h1C0084] = 8'hC8;
+	sram_hi[21'h1E0084] = 8'h51; sram_lo[21'h1E0084] = 8'hC8;
+	sram_hi[21'h1C0085] = 8'hFF; sram_lo[21'h1C0085] = 8'hFE;
+	sram_hi[21'h1E0085] = 8'hFF; sram_lo[21'h1E0085] = 8'hFE;
+	sram_hi[21'h1C0086] = 8'h13; sram_lo[21'h1C0086] = 8'hF9;
+	sram_hi[21'h1E0086] = 8'h13; sram_lo[21'h1E0086] = 8'hF9;
+	sram_hi[21'h1C0087] = 8'h00; sram_lo[21'h1C0087] = 8'hBF;
+	sram_hi[21'h1E0087] = 8'h00; sram_lo[21'h1E0087] = 8'hBF;
+	sram_hi[21'h1C0088] = 8'hE0; sram_lo[21'h1C0088] = 8'h01;
+	sram_hi[21'h1E0088] = 8'hE0; sram_lo[21'h1E0088] = 8'h01;
+	sram_hi[21'h1C0089] = 8'h00; sram_lo[21'h1C0089] = 8'hC0;
+	sram_hi[21'h1E0089] = 8'h00; sram_lo[21'h1E0089] = 8'hC0;
+	sram_hi[21'h1C008A] = 8'h00; sram_lo[21'h1C008A] = 8'h01;
+	sram_hi[21'h1E008A] = 8'h00; sram_lo[21'h1E008A] = 8'h01;
+	sram_hi[21'h1C008B] = 8'h33; sram_lo[21'h1C008B] = 8'hFC;
+	sram_hi[21'h1E008B] = 8'h33; sram_lo[21'h1E008B] = 8'hFC;
+	sram_hi[21'h1C008C] = 8'h0F; sram_lo[21'h1C008C] = 8'h00;
+	sram_hi[21'h1E008C] = 8'h0F; sram_lo[21'h1E008C] = 8'h00;
+	sram_hi[21'h1C008D] = 8'h00; sram_lo[21'h1C008D] = 8'hDF;
+	sram_hi[21'h1E008D] = 8'h00; sram_lo[21'h1E008D] = 8'hDF;
+	sram_hi[21'h1C008E] = 8'hF1; sram_lo[21'h1C008E] = 8'h80;
+	sram_hi[21'h1E008E] = 8'hF1; sram_lo[21'h1E008E] = 8'h80;
+	sram_hi[21'h1C008F] = 8'h60; sram_lo[21'h1C008F] = 8'hFE;
+	sram_hi[21'h1E008F] = 8'h60; sram_lo[21'h1E008F] = 8'hFE;
 end
 
 // ---------------- MCU spi (mode 0) ----------------
@@ -313,6 +322,7 @@ initial begin
 	check("step pulses with DIR = in", step_dir_in, 0);
 	check("drive on cylinder 0", drive.cyl, 0);
 	check("DIR setup", drive.dir_err, 0);
+	check("STEP pulse width", drive.short_err, 0);
 	check("DSKCHG requests", n_ask > 0, 1'b1);
 	check("DSKCHG line on", dut.nanomig.minimig.PAULA1.pf1.paula_floppy_ext_on.ext.line_on, 1'b1);
 	$display("tb_go_floppy: %0d errors", errors);
