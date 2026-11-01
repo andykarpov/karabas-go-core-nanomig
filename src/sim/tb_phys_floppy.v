@@ -220,9 +220,9 @@ always @(posedge clk) begin
 end
 
 // the debug snapshot of each dma (paula_floppy DBG_DMA)
-always @(dut.dbg_snap) $display("%t dbg: %0s head %0d cyl %0d syncs %0d seq %0d %0s %0d", $time,
-	dut.dbg_snap[31] ? "write" : "read", dut.dbg_snap[30], dut.dbg_snap[29:23], dut.dbg_snap[22:16],
-	dut.dbg_snap[15:12], dut.dbg_snap[31] ? "wdata/16" : "rev", dut.dbg_snap[11:0]);
+always @(dut.dbg_snap) $display("%t dbg: write %0d head %0d cyl %0d syncs %0d seq %0d low12 %0d (read: viol %0d drop %0d)", $time,
+	dut.dbg_snap[31], dut.dbg_snap[30], dut.dbg_snap[29:23], dut.dbg_snap[22:16], dut.dbg_snap[15:12], dut.dbg_snap[11:0],
+	dut.dbg_snap[11:4], dut.dbg_snap[3:0]);
 integer nsync = 0;
 always @(posedge clk) if (clk7_en && syncint) nsync = nsync + 1;
 

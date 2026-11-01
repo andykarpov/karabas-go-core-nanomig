@@ -1202,12 +1202,20 @@ end
 // debug=1). DBG_DMA 0: the DSKCHG state of paula_floppy_ext. DBG_DMA 1: a snapshot at the end of
 // each disk dma of a physical drive:
 //   DEBUG_ADDR { write, head, cylinder (7), sync words seen by the PLL during the dma (7, max 127) }
-//   DEBUG_DATA { sequence (4), read: the last revolution of the selected drive in 1024 clk7
-//                (144.6 us; 1383 = 200 ms = 300 rpm), write: WDATA pulses / 16 (12) }
+//   DEBUG_DATA { sequence (4), read: words of the PLL with an MFM violation ("11" or "0000",
+//                with the 3 bits before the word) after the first sync (8, max 255), words the
+//                fifo had no room for (4, max 15); write: WDATA pulses / 16 (12) }
 localparam DBG_DMA = 1;
 reg  [9:0] dbg_pre = 10'd0;
 reg [11:0] dbg_rev_cnt = 12'd0, dbg_rev = 12'd0;
 reg  [6:0] dbg_sync = 7'd0;
+reg  [7:0] dbg_viol = 8'd0;
+reg  [3:0] dbg_drop = 4'd0;
+reg  [2:0] dbg_prev = 3'd0;
+reg        dbg_synced = 1'b0;
+wire [18:0] dbg_bits = { dbg_prev, ext_rx };
+wire       dbg_11 = |(dbg_bits[18:1] & dbg_bits[17:0]);
+wire       dbg_0000 = |(~(dbg_bits[18:3] | dbg_bits[17:2] | dbg_bits[16:1] | dbg_bits[15:0]));
 reg [15:0] dbg_wpulse = 16'd0;
 reg        dbg_dma_d = 1'b0, dbg_ext = 1'b0, dbg_wr = 1'b0, dbg_wd_d = 1'b1;
 reg  [3:0] dbg_seq = 4'd0;
@@ -1225,19 +1233,30 @@ always @(posedge clk) begin
 		dbg_wd_d <= ext_wd;
 		if (dmaen && !dbg_dma_d) begin
 			dbg_sync <= 7'd0;
+			dbg_viol <= 8'd0;
+			dbg_drop <= 4'd0;
+			dbg_synced <= 1'b0;
 			dbg_wpulse <= 16'd0;
 			dbg_ext <= ext_sel;
 			dbg_wr <= dsklen[14];
 		end else if (dmaen) begin
 			if (ext_wr && ext_sync && trackrd && !(&dbg_sync))
 				dbg_sync <= dbg_sync + 7'd1;
+			if (ext_wr && trackrd) begin
+				dbg_prev <= ext_rx[2:0];
+				if (ext_sync) dbg_synced <= 1'b1;
+				if (dbg_synced && (dbg_11 || dbg_0000) && !(&dbg_viol))
+					dbg_viol <= dbg_viol + 8'd1;
+				if (trackrdok && fifo_full && !lenzero && !(&dbg_drop))
+					dbg_drop <= dbg_drop + 4'd1;
+			end
 			if (!ext_wd && dbg_wd_d && !ext_wg && !(&dbg_wpulse))
 				dbg_wpulse <= dbg_wpulse + 16'd1;
 		end
 		if (!dmaen && dbg_dma_d && dbg_ext) begin
 			dbg_seq <= dbg_seq + 4'd1;
 			dbg_snap <= { dbg_wr, ~side, dsktrack[sel], dbg_sync,
-				dbg_seq + 4'd1, dbg_wr ? dbg_wpulse[15:4] : dbg_rev };
+				dbg_seq + 4'd1, dbg_wr ? dbg_wpulse[15:4] : { dbg_viol, dbg_drop } };
 		end
 	end
 end
