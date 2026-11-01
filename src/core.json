@@ -1,7 +1,7 @@
 {
     "id": "nanomig",
     "name": "Nanomig",
-    "build": "26101704",
+    "build": "26110101",
     "bitstream": "karabas_go.bin",
     "visible": true,
     "type": "osd",
