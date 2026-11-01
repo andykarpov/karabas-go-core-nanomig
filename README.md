@@ -187,6 +187,11 @@ not in the release yet.**
   for one (it steps the head every few seconds and the core then turns the motor on briefly). To
   be safe after swapping disks, choose `[ Physical DFn ]` again in the OSD: that is a disk change
   for the Amiga.
+- With the DSKCHG hotfix of the board (pin 34 through a free gate of U18 to the RP2040,
+  [karabas-go-pcb](https://github.com/andykarpov/karabas-go-pcb) `Hotfix-DSKCHG.md`) and a firmware
+  that knows it, the core reads the real disk change line instead: a disk swap is seen also with
+  the motor off, and the motor no longer turns on when the Amiga looks for a disk (a PC drive
+  whose light follows the select flashes briefly then). Set the DC / RDY jumper of the drive to DC.
 - Copy-protected originals read like on a real Amiga as far as the data separator of the core
   (from [RobSmithDev's MiSTer floppy](https://mister.robsmithdev.co.uk)) allows.
 

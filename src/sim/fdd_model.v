@@ -8,7 +8,8 @@ module fdd_model #(
 )
 (
 	input ds, motor, dir, step, side1, wgate, wdata,
-	output index, tr00, wprt, rdata
+	output index, tr00, wprt, rdata,
+	output dskchg                    // pin 34 through the inverter of the Go hotfix: high = changed
 );
 
 localparam NSLOT = 800000;           // 200 ms
@@ -16,6 +17,8 @@ reg trk [0:2*NSLOT-1];
 reg [15:0] w [0:6249];
 
 reg disk_in = 1'b0;
+reg chg_latch = 1'b1;                // DSKCHG: set at power on and when the disk goes out, cleared
+                                     // by a step with a disk in
 reg wp = 1'b0;
 integer cyl = 3;
 integer nsteps = 0, dir_err = 0, nwflux = 0;
@@ -42,7 +45,9 @@ reg writing = 1'b0;
 
 always @(posedge motor) motor_t = $time;
 always @(dir) dir_t = $time;
+always @(negedge disk_in) chg_latch = 1'b1;
 always @(posedge step) begin
+	if (ds && disk_in) chg_latch = 1'b0;
 	if (ds) begin
 		nsteps = nsteps + 1;
 		if ($time - dir_t < 1000) dir_err = dir_err + 1;
@@ -89,5 +94,6 @@ assign index = ds & index_r;
 assign tr00 = ds & (cyl == 0);
 assign wprt = ds & (wp | !disk_in);
 assign rdata = ds & rdata_r;
+assign dskchg = ds & chg_latch;
 
 endmodule

@@ -122,7 +122,9 @@ module paula_floppy #(
 	input [7:0]	  floppy_ext, // DFn: [2n+1:2n] = 0 image, 1 drive DS0, 2 drive DS1
 	input [3:0]	  floppy_ext_chg, // one clock: DFn was chosen again (disk change)
 	input [3:0]	  fdd_in, // { rdata, wprt, tr00, index }, high = active
-	output [7:0]	  fdd_out // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
+	output [7:0]	  fdd_out, // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
+	output [2:0]	  fdd_chng_req, // DSKCHG request { one clock, drive } (kg_mcu CMD_FDD_CHNG)
+	input [4:0]	  fdd_chng_in // its answer { one clock, drive, value }
 );
 
 //register names and addresses
@@ -225,6 +227,8 @@ paula_floppy_ext ext
 	._write_gate(ext_wg),
 	._write_data(ext_wd),
 	.fdd_out(fdd_out),
+	.chng_req(fdd_chng_req),
+	.chng_in(fdd_chng_in),
 	.ext_drv(ext_drv),
 	.ext_sel(ext_sel),
 	._change_v(ext_change_v),
@@ -268,6 +272,7 @@ end else begin : paula_floppy_ext_off
 
 // no physical drives: the ext_* signals are constants and the muxes below fold away
 assign fdd_out = 8'd0;
+assign fdd_chng_req = 3'd0;
 assign ext_drv = 4'd0;
 assign ext_sel = 1'b0;
 assign ext_change_v = 4'b1111;

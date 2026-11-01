@@ -222,6 +222,8 @@ module minimig #(
 	input [3:0]   floppy_ext_chg,
 	input [3:0]   fdd_in,
 	output [7:0]  fdd_out,
+	output [2:0]  fdd_chng_req,
+	input [4:0]   fdd_chng_in,
 	input [5:0]   ide_config,
 
         // Interface MiSTeryNano sd card interface. This very simple connection allows the core
@@ -565,7 +567,9 @@ paula #(.FLOPPY_EXT(FLOPPY_EXT)) PAULA1
 	.floppy_ext(floppy_ext),
 	.floppy_ext_chg(floppy_ext_chg),
 	.fdd_in(fdd_in),
-	.fdd_out(fdd_out)
+	.fdd_out(fdd_out),
+	.fdd_chng_req(fdd_chng_req),
+	.fdd_chng_in(fdd_chng_in)
 );
 
 wire [2:0] cachecfg_pre;

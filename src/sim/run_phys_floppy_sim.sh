@@ -1,10 +1,12 @@
 #!/bin/bash
 # Simulate paula_floppy.v with a physical drive (paula_floppy_ext.v, MiSTerFloppyPLL.v) against a
 # model of a PC 3.5" DD drive with ISim (tb_phys_floppy.v). The disk is random data (4 tracks).
-# Usage: src/sim/run_phys_floppy_sim.sh [drive slower by ppm, 15000] [flux jitter ns, 200]
+# Usage: src/sim/run_phys_floppy_sim.sh [drive slower by ppm, 15000] [flux jitter ns, 200] [FW: 0 a
+# firmware without CMD_FDD_CHNG, 1 the DSKCHG hotfix; default both, one run each]
 set -e
 SPEED_PPM=${1:-15000}
 JITTER=${2:-200}
+FWS=${3:-0 1}
 set --
 source /opt/Xilinx/14.7/ISE_DS/settings64.sh > /dev/null
 cd "$(dirname "$0")"
@@ -46,8 +48,11 @@ verilog work "$R/minimig-aga/paula_floppy.v"
 verilog work "$S/fdd_model.v"
 verilog work "$S/tb_phys_floppy.v"
 PRJ
-fuse -prj tb.prj -top work.tb_phys_floppy -generic_top "SPEED_PPM=$SPEED_PPM" -generic_top "JITTER=$JITTER" -generic_top "NWWORDS=$NW" -o tb.exe > fuse.log || { grep -E "ERROR" fuse.log; exit 1; }
 echo "run all; quit" > run.tcl
-./tb.exe -tclbatch run.tcl > sim.log
-grep -v -e "^ISim" -e "^This is a" -e "^Time resolution" -e "^Simulator is doing" -e "^Finished circuit" -e "paula_floppy.v:" sim.log | head -60
-grep -q "tb_phys_floppy: 0 errors" sim.log
+for FW in $FWS; do
+	echo "== FW=$FW"
+	fuse -prj tb.prj -top work.tb_phys_floppy -generic_top "SPEED_PPM=$SPEED_PPM" -generic_top "JITTER=$JITTER" -generic_top "NWWORDS=$NW" -generic_top "FW=$FW" -o tb$FW.exe > fuse$FW.log || { grep -E "ERROR" fuse$FW.log; exit 1; }
+	./tb$FW.exe -tclbatch run.tcl > sim$FW.log
+	grep -v -e "^ISim" -e "^This is a" -e "^Time resolution" -e "^Simulator is doing" -e "^Finished circuit" -e "paula_floppy.v:" sim$FW.log | head -60
+	grep -q "tb_phys_floppy: 0 errors" sim$FW.log
+done

@@ -41,6 +41,8 @@ module nanomig #(
    input [3:0]	 floppy_ext_chg, // one clock: DFn was chosen again (disk change)
    input [3:0]	 fdd_in, // { rdata, wprt, tr00, index }, high = active
    output [7:0]	 fdd_out, // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
+   output [2:0]	 fdd_chng_req, // DSKCHG request { one clock, drive 1 DS0 / 2 DS1 } (kg_mcu CMD_FDD_CHNG)
+   input [4:0]	 fdd_chng_in, // its answer { one clock, drive, value 0 disk in / 1 changed / 2 no line }
    input [3:0]	 video_config,
    input [5:0]	 ide_config,
 		
@@ -1125,6 +1127,8 @@ minimig #(.FLOPPY_EXT(FLOPPY_EXT)) minimig
 	.floppy_ext_chg(floppy_ext_chg  ),
 	.fdd_in        (fdd_in          ),
 	.fdd_out       (fdd_out         ),
+	.fdd_chng_req  (fdd_chng_req    ),
+	.fdd_chng_in   (fdd_chng_in     ),
         .ide_config    (ide_config      ), 
 
 	//sram pins

@@ -17,6 +17,17 @@
 //   starts a probe, the motor runs for up to PROBE and the drive is selected (while the Amiga
 //   selects no physical drive); two index pulses mean a disk, and the next step of the Amiga
 //   clears _CHNG.
+// - _CHNG with the DSKCHG hotfix of the board (pin 34 through U18 to RP2040 GPIO28, firmware
+//   CMD_FDD_CHNG 49): the level of the drive is asked for. The Amiga selects a drive for a few
+//   microseconds, too short for the link, so the module selects the drive itself (no motor, while
+//   the Amiga selects no other physical drive), waits SETTLE and sends a request (chng_req);
+//   the firmware answers with GPIO28 now (chng_in), and the drive stays selected until then (or
+//   ANSWER). Answer 1 (changed / no disk): _CHNG low, no disk; 0: a disk, _CHNG high. A drive is
+//   asked at reset, after a step of the Amiga on it while no disk is known, and when the Amiga
+//   stops selecting it and the last answer is older than RECHECK. After an OSD event _CHNG stays
+//   low until the Amiga steps (an answer 0 right away would hide the change from it). The first answer 0 / 1 turns the line
+//   on: then no probe spins the motor. Answer 2 (no line) or NOANSWER timeouts in a row (older
+//   firmware) turn the requests off until the core is loaded again, and the emulation stays.
 // Times are in ticks of 2^TICK_BITS clk7_en cycles (1024: 144.6 us at 7.08 MHz).
 //
 // fdd_in / fdd_out are at the FPGA pins, high = active (the board has inverters to the connector).
@@ -26,7 +37,11 @@ module paula_floppy_ext #(
 	parameter SPINUP    = 13'd3458,      // 500 ms
 	parameter NOINDEX   = 13'd2766,      // 400 ms: two revolutions
 	parameter PROBE     = 13'd6916,      // 1 s
-	parameter DIR_SETUP = 5'd20          // 2.8 us
+	parameter DIR_SETUP = 5'd20,         // 2.8 us
+	parameter SETTLE    = 8'd142,        // 20 us (clk7_en cycles): select to request
+	parameter ANSWER    = 9'd346,        // 50 ms (ticks): the drive stays selected for an answer
+	parameter RECHECK   = 13'd3458,      // 500 ms
+	parameter NOANSWER  = 2'd3           // timeouts in a row without the line
 )
 (
 	input            clk,
@@ -54,7 +69,12 @@ module paula_floppy_ext #(
 	output           _wprot_x,            // of the selected physical drive
 	output           _track0_x,
 	output           index_x,             // one clk7_en cycle: index pulse of the selected drive
-	output           _dskrd               // read data, synchronised, low = flux transition
+	output           _dskrd,              // read data, synchronised, low = flux transition
+
+	// DSKCHG of the board (kg_mcu CMD_FDD_CHNG): a request (one clock) for drive 1 DS0 / 2 DS1,
+	// the answer { one clock, drive, value }
+	output reg [2:0] chng_req = 3'd0,     // { req, drive }
+	input      [4:0] chng_in              // { wr, drive, value: 0 disk in, 1 changed, 2 no line }
 );
 
 // ---------------- inputs ----------------
@@ -106,9 +126,23 @@ reg        probe_k = 1'b0;
 reg [12:0] probe_cnt = 13'd0;
 reg  [1:0] probe_idx = 2'd0;
 
+// DSKCHG requests
+localparam Q_IDLE = 2'd0, Q_SETTLE = 2'd1, Q_WAIT = 2'd2, Q_DRAIN = 2'd3;
+reg  [1:0] q_state = Q_IDLE;
+reg        q_k = 1'b0;               // the drive asked for
+reg  [7:0] q_cnt = 8'd0;             // SETTLE (clk7_en cycles)
+reg  [8:0] q_tmo = 9'd0;             // ANSWER (ticks)
+reg  [1:0] q_miss = 2'd0;            // timeouts in a row
+reg        line_on = 1'b0;           // the firmware answered with a level
+reg        line_off = 1'b0;          // no line: no more requests
+reg  [1:0] want = 2'b00;             // DS0 / DS1 should be asked
+reg [12:0] age0 = 13'd0, age1 = 13'd0; // ticks since the last answer of DS0 / DS1
+wire [1:0] q_ds = (q_state == Q_SETTLE || q_state == Q_WAIT) ? (q_k ? 2'b10 : 2'b01) : 2'b00;
+wire [1:0] mapped = { |on_ds1, |on_ds0 };
+
 wire       motor = |(motor_on & ext_drv) | probe_on;
 wire [1:0] probe_ds = (probe_on && amiga_ds == 2'b00) ? (probe_k ? 2'b10 : 2'b01) : 2'b00;
-wire [1:0] ds = amiga_ds | probe_ds;
+wire [1:0] ds = amiga_ds | probe_ds | q_ds;
 
 reg [12:0] spin_cnt = 13'd0;
 wire       spun = (spin_cnt == SPINUP);
@@ -119,6 +153,7 @@ reg [12:0] noidx_cnt0 = 13'd0, noidx_cnt1 = 13'd0;
 reg  [1:0] sel_age0 = 2'd0, sel_age1 = 2'd0;  // ticks the drive has been selected (up to 2)
 reg        index_d = 1'b0;
 reg        _step_d = 1'b1;
+reg  [1:0] amiga_ds_d = 2'b00;
 
 wire index_rise = index_s & ~index_d;
 // an index pulse of a drive that has been selected for a while (one that is low at the select
@@ -133,10 +168,23 @@ always @(posedge clk)
 	chg_p <= clk7_en ? 2'b00 : chg_p | chg_now;
 wire [1:0] chg_k = chg_p | chg_now;
 
+// the answer of the firmware (any clock), taken at the next clk7_en
+reg  [2:0] ans = 3'd0;               // { valid, value }
+reg        ans_k = 1'b0;
 always @(posedge clk) begin
+	if (chng_in[4] && (q_state == Q_WAIT || q_state == Q_DRAIN) && chng_in[3:2] == (q_k ? 2'd2 : 2'd1)) begin
+		ans <= { 1'b1, chng_in[1:0] };
+		ans_k <= q_k;
+	end else if (clk7_en)
+		ans <= 3'd0;
+end
+
+always @(posedge clk) begin
+	chng_req <= 3'd0;
 	if (clk7_en) begin
 		index_d <= index_s;
 		_step_d <= _step;
+		amiga_ds_d <= amiga_ds;
 
 		if (!motor)
 			spin_cnt <= 13'd0;
@@ -177,7 +225,10 @@ always @(posedge clk) begin
 		if (step_end) begin
 			if (amiga_ds[0] && present[0]) _chng[0] <= 1'b1;
 			if (amiga_ds[1] && present[1]) _chng[1] <= 1'b1;
-			if (!probe_on && !motor && amiga_ds != 2'b00 && !(amiga_ds[1] ? present[1] : present[0])) begin
+			// the Amiga looks for a disk: ask the drive after the step
+			if (amiga_ds[0] && !present[0]) want[0] <= 1'b1;
+			if (amiga_ds[1] && !present[1]) want[1] <= 1'b1;
+			if (!line_on && !probe_on && q_state == Q_IDLE && !motor && amiga_ds != 2'b00 && !(amiga_ds[1] ? present[1] : present[0])) begin
 				probe_on <= 1'b1;
 				probe_k <= amiga_ds[1];
 				probe_cnt <= 13'd0;
@@ -200,19 +251,96 @@ always @(posedge clk) begin
 			end
 		end
 
-		// a new disk chosen in the OSD: changed, and looked for again
+		// DSKCHG of the board: the age of the answers; ask again when the Amiga lets a drive go
+		if (tick) begin
+			if (age0 != RECHECK) age0 <= age0 + 13'd1;
+			if (age1 != RECHECK) age1 <= age1 + 13'd1;
+		end
+		if (amiga_ds_d[0] && !amiga_ds[0] && age0 == RECHECK) want[0] <= 1'b1;
+		if (amiga_ds_d[1] && !amiga_ds[1] && age1 == RECHECK) want[1] <= 1'b1;
+
+		case (q_state)
+		Q_IDLE:
+			// one drive at a time, and only while the Amiga selects no other physical drive
+			if (!line_off && !probe_on && (want & mapped) != 2'b00) begin
+				if ((want[0] & mapped[0]) && !amiga_ds[1]) begin
+					q_k <= 1'b0;
+					q_state <= Q_SETTLE;
+					q_cnt <= 8'd0;
+				end else if ((want[1] & mapped[1]) && !amiga_ds[0]) begin
+					q_k <= 1'b1;
+					q_state <= Q_SETTLE;
+					q_cnt <= 8'd0;
+				end
+			end
+		Q_SETTLE:
+			if (q_k ? amiga_ds[0] : amiga_ds[1])
+				q_state <= Q_IDLE;          // the Amiga took the other drive: later
+			else if (q_cnt == SETTLE) begin
+				chng_req <= { 1'b1, q_k ? 2'd2 : 2'd1 };
+				want[q_k] <= 1'b0;
+				q_tmo <= 9'd0;
+				q_state <= Q_WAIT;
+			end else
+				q_cnt <= q_cnt + 8'd1;
+		Q_WAIT:
+			if (ans[2]) begin
+				q_state <= Q_IDLE;
+				q_miss <= 2'd0;
+				if (ans[1:0] == 2'd2)
+					line_off <= 1'b1;
+				else begin
+					line_on <= 1'b1;
+					probe_on <= 1'b0;
+					// 1: changed or no disk; 0: a disk that was stepped since it went in
+					present[ans_k] <= ~ans[0];
+					_chng[ans_k] <= ~ans[0];
+					if (ans_k) age1 <= 13'd0; else age0 <= 13'd0;
+				end
+			end else if (q_k ? amiga_ds[0] : amiga_ds[1]) begin
+				// the Amiga took the other drive: the line is its now. The answer that is on its way
+				// may be of either drive: wait for it (or the timeout) and ask again.
+				q_state <= Q_DRAIN;
+				want[q_k] <= 1'b1;
+			end else if (tick) begin
+				if (q_tmo == ANSWER) begin
+					// ask again (a lost frame), until NOANSWER in a row
+					q_state <= Q_IDLE;
+					want[q_k] <= 1'b1;
+					q_miss <= q_miss + 2'd1;
+					if (q_miss + 2'd1 == NOANSWER)
+						line_off <= 1'b1;
+				end else
+					q_tmo <= q_tmo + 9'd1;
+			end
+		Q_DRAIN:
+			if (ans[2] || (tick && q_tmo == ANSWER))
+				q_state <= Q_IDLE;
+			else if (tick)
+				q_tmo <= q_tmo + 9'd1;
+		endcase
+
+		// a new disk chosen in the OSD: changed, and looked for again. A request of the drive
+		// on its way is dropped: its answer (a disk in) would hide the change from the Amiga.
 		if (chg_k[0]) begin
 			present[0] <= 1'b0;
 			_chng[0] <= 1'b0;
+			want[0] <= 1'b0;
 		end
 		if (chg_k[1]) begin
 			present[1] <= 1'b0;
 			_chng[1] <= 1'b0;
+			want[1] <= 1'b0;
+		end
+		if (chg_k[q_k]) begin
+			if (q_state == Q_SETTLE) q_state <= Q_IDLE;
+			if (q_state == Q_WAIT) q_state <= Q_DRAIN;
 		end
 
 		if (reset) begin
 			_chng <= 2'b00;
 			probe_on <= 1'b0;
+			want <= 2'b11;
 		end
 	end
 end
