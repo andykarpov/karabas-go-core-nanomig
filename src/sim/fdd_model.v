@@ -21,10 +21,11 @@ reg chg_latch = 1'b1;                // DSKCHG: set at power on and when the dis
                                      // by a step with a disk in
 reg wp = 1'b0;
 integer cyl = 3;
-integer nsteps = 0, dir_err = 0, nwflux = 0;
+integer nsteps = 0, dir_err = 0, short_err = 0, nwflux = 0;
 integer pos = 0;
 integer t, b, idx;
-time motor_t = 0, dir_t = 0;
+time motor_t = 0, dir_t = 0, step_t = 0;
+reg step_dir = 1'b0;
 real slot_ns;
 reg index_r = 1'b0, rdata_r = 1'b0;
 reg wflag = 1'b0;
@@ -46,12 +47,19 @@ reg writing = 1'b0;
 always @(posedge motor) motor_t = $time;
 always @(dir) dir_t = $time;
 always @(negedge disk_in) chg_latch = 1'b1;
+// a step needs DIR steady for 3 us before it and a pulse of 3 us (a PC drive on the Go missed
+// shorter ones, karabas-go-core-pcxt); the drive steps at the end of the pulse
 always @(posedge step) begin
-	if (ds && disk_in) chg_latch = 1'b0;
-	if (ds) begin
+	step_t = $time;
+	step_dir = dir;
+	if (ds && $time - dir_t < 3000) dir_err = dir_err + 1;
+end
+always @(negedge step) begin
+	if (ds && $time - step_t < 3000) short_err = short_err + 1;
+	else if (ds) begin
+		if (disk_in) chg_latch = 1'b0;
 		nsteps = nsteps + 1;
-		if ($time - dir_t < 1000) dir_err = dir_err + 1;
-		if (dir) cyl = cyl + 1;
+		if (step_dir) cyl = cyl + 1;
 		else if (cyl > 0) cyl = cyl - 1;
 	end
 end

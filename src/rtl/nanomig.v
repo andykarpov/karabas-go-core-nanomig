@@ -43,6 +43,7 @@ module nanomig #(
    output [7:0]	 fdd_out, // { wdata, wgate, side1, step, dir, motor, ds1, ds0 }
    output [2:0]	 fdd_chng_req, // DSKCHG request { one clock, drive 1 DS0 / 2 DS1 } (kg_mcu CMD_FDD_CHNG)
    input [4:0]	 fdd_chng_in, // its answer { one clock, drive, value 0 disk in / 1 changed / 2 no line }
+   output [31:0] fdd_dbg, // paula_floppy_ext state for the debug log (DEBUG_ADDR / DEBUG_DATA of kg_mcu)
    input [3:0]	 video_config,
    input [5:0]	 ide_config,
 		
@@ -1129,6 +1130,7 @@ minimig #(.FLOPPY_EXT(FLOPPY_EXT)) minimig
 	.fdd_out       (fdd_out         ),
 	.fdd_chng_req  (fdd_chng_req    ),
 	.fdd_chng_in   (fdd_chng_in     ),
+	.fdd_dbg       (fdd_dbg         ),
         .ide_config    (ide_config      ), 
 
 	//sram pins

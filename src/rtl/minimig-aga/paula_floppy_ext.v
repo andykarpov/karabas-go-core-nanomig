@@ -6,7 +6,9 @@
 // Amiga drive out of a PC / Shugart drive:
 // - select: the drive of an Amiga drive follows its _SEL; motor: the motor latches of paula;
 // - STEP waits DIR_SETUP clocks after a change of DIR (Kickstart 1.3 changes both at once) and is
-//   at least ~1 us long;
+//   at least STEP_W clocks long, 8 us each as the physical floppy of karabas-go-core-pcxt (a PC
+//   drive on a Go missed shorter pulses there). The drive that steps stays selected until its
+//   pulse is over: the Amiga may let it go right after its own (short) step pulse;
 // - _RDY: with the motor off the ID of a 3.5" DD drive (all ones, _RDY low); with the motor on low
 //   once the motor runs SPINUP and a disk was seen;
 // - _CHNG: the connector has no DSKCHG (pin 34), so it is emulated. It goes low (disk changed) at
@@ -37,7 +39,8 @@ module paula_floppy_ext #(
 	parameter SPINUP    = 13'd3458,      // 500 ms
 	parameter NOINDEX   = 13'd2766,      // 400 ms: two revolutions
 	parameter PROBE     = 13'd6916,      // 1 s
-	parameter DIR_SETUP = 5'd20,         // 2.8 us
+	parameter DIR_SETUP = 6'd57,         // 8 us (clk7_en cycles)
+	parameter STEP_W    = 6'd57,         // 8 us
 	parameter SETTLE    = 8'd142,        // 20 us (clk7_en cycles): select to request
 	parameter ANSWER    = 9'd346,        // 50 ms (ticks): the drive stays selected for an answer
 	parameter RECHECK   = 13'd3458,      // 500 ms
@@ -74,7 +77,8 @@ module paula_floppy_ext #(
 	// DSKCHG of the board (kg_mcu CMD_FDD_CHNG): a request (one clock) for drive 1 DS0 / 2 DS1,
 	// the answer { one clock, drive, value }
 	output reg [2:0] chng_req = 3'd0,     // { req, drive }
-	input      [4:0] chng_in              // { wr, drive, value: 0 disk in, 1 changed, 2 no line }
+	input      [4:0] chng_in,             // { wr, drive, value: 0 disk in, 1 changed, 2 no line }
+	output    [31:0] dbg                  // state for the debug log of the firmware (kg_mcu DEBUG_*)
 );
 
 // ---------------- inputs ----------------
@@ -129,6 +133,7 @@ reg  [1:0] probe_idx = 2'd0;
 // DSKCHG requests
 localparam Q_IDLE = 2'd0, Q_SETTLE = 2'd1, Q_WAIT = 2'd2, Q_DRAIN = 2'd3;
 reg  [1:0] q_state = Q_IDLE;
+wire       step_busy;                // a STEP pulse of a drive is on its way (no other select)
 reg        q_k = 1'b0;               // the drive asked for
 reg  [7:0] q_cnt = 8'd0;             // SETTLE (clk7_en cycles)
 reg  [8:0] q_tmo = 9'd0;             // ANSWER (ticks)
@@ -141,8 +146,13 @@ wire [1:0] q_ds = (q_state == Q_SETTLE || q_state == Q_WAIT) ? (q_k ? 2'b10 : 2'
 wire [1:0] mapped = { |on_ds1, |on_ds0 };
 
 wire       motor = |(motor_on & ext_drv) | probe_on;
-wire [1:0] probe_ds = (probe_on && amiga_ds == 2'b00) ? (probe_k ? 2'b10 : 2'b01) : 2'b00;
-wire [1:0] ds = amiga_ds | probe_ds | q_ds;
+wire [1:0] probe_ds = (probe_on && amiga_ds == 2'b00 && !step_busy) ? (probe_k ? 2'b10 : 2'b01) : 2'b00;
+// STEP (below): the drive that steps is held selected until its pulse is over
+reg        step_pend = 1'b0;         // a step pulse waits for DIR to settle
+reg        step_q = 1'b0;
+reg  [1:0] step_ds = 2'b00;          // the drive(s) the Amiga stepped
+wire [1:0] hold_ds = (step_pend | step_q) ? step_ds : 2'b00;
+wire [1:0] ds = amiga_ds | probe_ds | q_ds | hold_ds;
 
 reg [12:0] spin_cnt = 13'd0;
 wire       spun = (spin_cnt == SPINUP);
@@ -262,7 +272,7 @@ always @(posedge clk) begin
 		case (q_state)
 		Q_IDLE:
 			// one drive at a time, and only while the Amiga selects no other physical drive
-			if (!line_off && !probe_on && (want & mapped) != 2'b00) begin
+			if (!line_off && !probe_on && !step_busy && (want & mapped) != 2'b00) begin
 				if ((want[0] & mapped[0]) && !amiga_ds[1]) begin
 					q_k <= 1'b0;
 					q_state <= Q_SETTLE;
@@ -279,6 +289,9 @@ always @(posedge clk) begin
 			else if (q_cnt == SETTLE) begin
 				chng_req <= { 1'b1, q_k ? 2'd2 : 2'd1 };
 				want[q_k] <= 1'b0;
+				// the age counts from the request: a deselect by the Amiga while the answer is on
+				// its way asks no second time
+				if (q_k) age1 <= 13'd0; else age0 <= 13'd0;
 				q_tmo <= 9'd0;
 				q_state <= Q_WAIT;
 			end else
@@ -366,33 +379,56 @@ assign index_x = index_rise & ext_sel & (sel_k ? ds[1] : ds[0]);
 // ---------------- STEP / DIR ----------------
 
 reg       dir_q = 1'b0;
-reg [4:0] dir_age = 5'd0;            // clocks since DIR changed
-reg       step_pend = 1'b0;          // a step pulse waits for DIR to settle
-reg       step_q = 1'b0;
-reg [2:0] step_w = 3'd0;             // minimum width
+reg [5:0] dir_age = 6'd0;            // clocks since DIR changed
+reg [5:0] step_w = 6'd0;             // minimum width
+assign step_busy = step_pend | step_q;
 
 always @(posedge clk) begin
 	if (clk7_en) begin
 		dir_q <= direc;
 		if (direc != dir_q)
-			dir_age <= 5'd0;
-		else if (dir_age != 5'd31)
-			dir_age <= dir_age + 5'd1;
+			dir_age <= 6'd0;
+		else if (dir_age != 6'd63)
+			dir_age <= dir_age + 6'd1;
 
-		if (!_step && _step_d)
+		// a step of the Amiga on a physical drive: that drive steps, held selected
+		if (!_step && _step_d && amiga_ds != 2'b00) begin
 			step_pend <= 1'b1;
-		if (step_pend && !step_q && dir_age >= DIR_SETUP && direc == dir_q) begin
+			step_ds <= amiga_ds;
+		end else if (step_busy && (amiga_ds & ~step_ds) != 2'b00) begin
+			// the Amiga took another physical drive: the pulse is dropped
+			step_pend <= 1'b0;
+			step_q <= 1'b0;
+		end else if (step_pend && !step_q && dir_age >= DIR_SETUP && direc == dir_q) begin
 			step_q <= 1'b1;
 			step_pend <= 1'b0;
-			step_w <= 3'd7;          // 1 us
+			step_w <= STEP_W;
 		end else if (step_q) begin
-			if (step_w != 3'd0)
-				step_w <= step_w - 3'd1;
+			if (step_w != 6'd0)
+				step_w <= step_w - 6'd1;
 			else if (_step)
 				step_q <= 1'b0;
 		end
 	end
 end
+
+// ---------------- debug ----------------
+
+// DEBUG_ADDR { line_on, line_off, q_miss, q_state, q_k, probe_on, _chng, present, want, mapped }
+// DEBUG_DATA { answers, last answer { drive, value }, timeouts } (mod 256 / 16)
+reg [7:0] n_ans = 8'd0;
+reg [3:0] last_ans = 4'd0;
+reg [3:0] n_tmo = 4'd0;
+always @(posedge clk) begin
+	if (chng_in[4]) begin
+		n_ans <= n_ans + 8'd1;
+		last_ans <= chng_in[3:0];
+	end
+	if (clk7_en && tick && q_state == Q_WAIT && q_tmo == ANSWER && !ans[2])
+		n_tmo <= n_tmo + 4'd1;
+end
+assign dbg = { line_on, line_off, q_miss, q_state, q_k, probe_on, _chng, present, want, mapped,
+	n_ans, last_ans, n_tmo };
 
 // ---------------- outputs ----------------
 
@@ -401,7 +437,7 @@ assign fdd_out = {
 	wgate & ~_write_data,             // WDATA
 	wgate,                            // WGATE
 	~side,                            // SIDE1: head 1 (side = 0 is the upper head)
-	step_q & (amiga_ds != 2'b00),     // STEP
+	step_q,                           // STEP (of step_ds, held selected)
 	~dir_q,                           // DIR: high = in (direc = 0)
 	motor,                            // MOTOR
 	ds[1],                            // DS1

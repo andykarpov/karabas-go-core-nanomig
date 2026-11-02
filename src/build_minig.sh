@@ -17,7 +17,7 @@ fi
 
 if [ "$STEP" = all ] || [ "$STEP" = impl ]; then
 	ngdbuild -intstyle ise -dd _ngo -nt timestamp -uc $TOP.ucf -p $PART $TOP.ngc $TOP.ngd
-	map -intstyle ise -p $PART -w -logic_opt off -ol high -xe n -t 1 -xt 0 -register_duplication off -r 4 -global_opt off -mt 2 -detail -ir off -pr b -lc off -power off -o ${TOP}_map.ncd $TOP.ngd $TOP.pcf
+	map -intstyle ise -p $PART -w -logic_opt off -ol high -xe n -t 2 -xt 0 -register_duplication off -r 4 -global_opt off -mt 2 -detail -ir off -pr b -lc off -power off -o ${TOP}_map.ncd $TOP.ngd $TOP.pcf
 	par -w -intstyle ise -ol high -xe n -mt 4 ${TOP}_map.ncd $TOP.ncd $TOP.pcf
 	trce -intstyle ise -v 3 -s 2 -n 3 -fastpaths -xml $TOP.twx $TOP.ncd -o $TOP.twr $TOP.pcf -ucf $TOP.ucf
 	bitgen -intstyle ise -f $TOP.ut $TOP.ncd

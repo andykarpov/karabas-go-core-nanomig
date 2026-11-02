@@ -57,7 +57,10 @@ always @(posedge clk) begin
 	 empty_write <= 1'b0;
       end else begin
   	 if(rd && !empty) begin
-	    if(empty_write) begin bypass_q <= in; bypass_sel <= 1'b1; end
+	    // karabas: a read of the only word with a write in the same cycle: the new head is the
+	    // word being written, which the read-first RAM does not return yet (it gave a stale word,
+	    // the read errors of a physical drive, whose fifo holds 0-1 words)
+	    if(empty_write || (wr && !full && in_ptr == out_ptr + 12'd1)) begin bypass_q <= in; bypass_sel <= 1'b1; end
 	    else            bypass_sel <= 1'b0;    // ram_q <= mem[out_ptr + 1]
   	    out_ptr <= out_ptr + 12'd1;
 	 end

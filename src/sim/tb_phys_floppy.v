@@ -242,14 +242,14 @@ task deselect;
 	end
 endtask
 
-// a step pulse; DIR changes with its leading edge, as Kickstart 1.3 does
+// a step pulse; DIR changes with its leading edge, as Kickstart 1.3 does; 3 ms step rate
 task step(input d);
 	begin
 		direc = d;
 		_step = 1'b0;
 		#3000;
 		_step = 1'b1;
-		#3000;
+		#3000000;
 	end
 endtask
 
@@ -604,8 +604,9 @@ initial begin
 	check(!f_ds0 && !f_ds1 && !f_motor, "DF0: a physical drive selected");
 	deselect;
 
-	$display("drive: %0d steps, %0d with DIR setup < 1 us", drive.nsteps, drive.dir_err);
+	$display("drive: %0d steps, %0d with DIR setup < 3 us, %0d pulses < 3 us", drive.nsteps, drive.dir_err, drive.short_err);
 	check(drive.dir_err == 0, "DIR setup");
+	check(drive.short_err == 0, "STEP pulse width");
 	$display("DSKCHG: %0d requests, %0d answered (FW %0d), %0d without their drive selected", nask, nans, FW, nask_bad);
 	if (FW == 1) check(nask_bad == 0, "line: a request without its drive selected until the answer");
 	$display("tb_phys_floppy: %0d errors", errors);
