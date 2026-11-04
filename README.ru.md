@@ -9,9 +9,9 @@ OCS / ECS) с процессором TG68K — на Xilinx Spartan-6 XC6SLX25 п
 
 | Плата | Файл ядра | Видео | Звук |
 |---|---|---|---|
-| Karabas Go | `nanomig.kg1` | VGA, 720x576 50 Гц (31 кГц) | I2S ЦАП (PCM5102) |
-| Karabas Mini | `nanomig.kg2` | HDMI, 720x576 50 Гц | HDMI, аналоговый выход (сигма-дельта) |
-| Karabas Mini G | `nanomig.kg3` | HDMI, 720x576 50 Гц | HDMI, I2S ЦАП |
+| Karabas Go | `nanomig.kg` | VGA, 720x576 50 Гц (31 кГц) | I2S ЦАП (PCM5102) |
+| Karabas Mini | `nanomig.kg` | HDMI, 720x576 50 Гц | HDMI, аналоговый выход (сигма-дельта) |
+| Karabas Mini G | `nanomig.kg` | HDMI, 720x576 50 Гц | HDMI, I2S ЦАП |
 
 Файлы ядра лежат в `src/`. В них нет ни Kickstart, ни других защищённых авторским правом данных.
 
@@ -37,7 +37,7 @@ IPF / SCP, дискет HD, последовательного и паралле
 
 ## Как начать
 
-1. Скопируйте `nanomig.kg1` (Go), `nanomig.kg2` (Mini) или `nanomig.kg3` (Mini G) в корень
+1. Скопируйте `nanomig.kg` (один файл для Go, Mini и Mini G) в корень
    SD-карты платы.
 2. Положите ПЗУ Kickstart на SD-карту как `/amiga/kick.rom` (см. [Kickstart](#kickstart)).
 3. Положите образы ADF (и HDF) на SD-карту, например в `/amiga`.
