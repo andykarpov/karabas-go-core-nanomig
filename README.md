@@ -9,9 +9,9 @@ chipset only) with the TG68K CPU, to the Xilinx Spartan-6 XC6SLX25 of the Karaba
 
 | Board | Core file | Video | Audio |
 |---|---|---|---|
-| Karabas Go | `nanomig.kg1` | VGA, 720x576 50 Hz (31 kHz) | I2S DAC (PCM5102) |
-| Karabas Mini | `nanomig.kg2` | HDMI, 720x576 50 Hz | HDMI, analog output (sigma-delta) |
-| Karabas Mini G | `nanomig.kg3` | HDMI, 720x576 50 Hz | HDMI, I2S DAC |
+| Karabas Go | `nanomig.kg` | VGA, 720x576 50 Hz (31 kHz) | I2S DAC (PCM5102) |
+| Karabas Mini | `nanomig.kg` | HDMI, 720x576 50 Hz | HDMI, analog output (sigma-delta) |
+| Karabas Mini G | `nanomig.kg` | HDMI, 720x576 50 Hz | HDMI, I2S DAC |
 
 The core files are in `src/`. They contain no Kickstart or other copyrighted data.
 
@@ -38,7 +38,7 @@ HD floppies, the serial and parallel ports.
 
 ## Getting started
 
-1. Copy `nanomig.kg1` (Go), `nanomig.kg2` (Mini) or `nanomig.kg3` (Mini G) to the root of the SD
+1. Copy `nanomig.kg` (one file for Go, Mini and Mini G) to the root of the SD
    card of the board.
 2. Put a Kickstart ROM on the SD card as `/amiga/kick.rom` (see [Kickstart](#kickstart)).
 3. Put your ADF (and HDF) images on the SD card, for example into `/amiga`.

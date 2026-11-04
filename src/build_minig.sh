@@ -24,5 +24,5 @@ if [ "$STEP" = all ] || [ "$STEP" = impl ]; then
 fi
 
 if [ "$STEP" = all ] || [ "$STEP" = core ]; then
-	python3 make_core.py core_minig.json nanomig.kg3
+	python3 make_core.py core.json nanomig.kg --boards minig
 fi
