@@ -122,7 +122,6 @@ assign SD_CLK = 1'b0;
 assign FT_SPI_CS_N = 1'b1;
 assign FT_SPI_SCK = 1'b0;
 assign FT_SPI_MOSI = 1'b0;
-assign FT_CLK_OUT = 1'b0;
 assign MIDI_TX = 1'b1;
 assign FLASH_CS_N = 1'b1;
 assign FLASH_DI = 1'b1;
@@ -133,7 +132,7 @@ assign FLASH_HOLD_N = 1'b1;
 //---------- Clock ------------
 
 // 50 MHz * 17 / 30 = 28.333 MHz (PAL Amiga: 28.375 MHz)
-wire clk_in, clkfb, clkfb_buf, clkout0, locked;
+wire clk_in, clkfb, clkfb_buf, clkout0, clkout1, locked;
 wire clk_sys;
 
 IBUFG u_clk_in (.I(CLK_50MHZ), .O(clk_in));
@@ -148,12 +147,15 @@ PLL_BASE #(
 	.CLKOUT0_DIVIDE(30),
 	.CLKOUT0_PHASE(0.000),
 	.CLKOUT0_DUTY_CYCLE(0.500),
+	.CLKOUT1_DIVIDE(106),       // 850 / 106 = 8.02 MHz: FT_CLK_OUT
+	.CLKOUT1_PHASE(0.000),
+	.CLKOUT1_DUTY_CYCLE(0.500),
 	.CLKIN_PERIOD(20.000),
 	.REF_JITTER(0.010)
 ) u_pll (
 	.CLKFBOUT(clkfb),
 	.CLKOUT0(clkout0),
-	.CLKOUT1(),
+	.CLKOUT1(clkout1),
 	.CLKOUT2(),
 	.CLKOUT3(),
 	.CLKOUT4(),
@@ -167,156 +169,140 @@ PLL_BASE #(
 BUFG u_clkfb_buf (.I(clkfb), .O(clkfb_buf));
 BUFG u_clk_sys (.I(clkout0), .O(clk_sys));
 
+// the clock of the FT812: it must always have one (karabas-go-notes ft-clk-out-required)
+wire clk_8;
+BUFG u_clk_8 (.I(clkout1), .O(clk_8));
+ODDR2 u_ft_clk (.Q(FT_CLK_OUT), .C0(clk_8), .C1(~clk_8), .CE(1'b1), .D0(1'b1), .D1(1'b0), .R(1'b0), .S(1'b0));
+
 wire areset = ~locked;
 
-//---------- MCU ------------
+//---------- MCU: link v2 (karabas-go-firmware docs/link_v2.md, kg_mcu2); INT on IO1 ------------
 
-wire romloader_act;
-wire [31:0] romloader_addr;
-wire [7:0] romloader_data;
-wire romloader_wr;
-wire ioctl_act;
-wire [3:0] rtc_a, rtc_wdata; // the MSM6242B registers of minimig (rtc_a 0-12 in the mcu dpram)
+wire [3:0] rtc_a, rtc_wdata; // the MSM6242B registers of minimig (rtc_a 0-12 in kg_l2_rtc)
 wire rtc_wr;
 wire [7:0] rtc_rdata8;
-wire [15:0] softsw_command, osd_command;
 wire mcu_busy;
 wire dvi_only;
-wire [7:0] kb_status, kb_dat0, kb_dat1, kb_dat2, kb_dat3, kb_dat4, kb_dat5;
-wire [7:0] ms_x, ms_y;
-wire [7:0] img_mounted;
-wire [63:0] img_size;
-wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
-wire [8:0] img_data_addr;
-wire [7:0] img_data, img_result;
-wire [15:0] img_sum;
-wire [23:0] img_q_di;
-wire [2:0] ms_b;
-wire ms_upd;
-wire [12:0] joy_l, joy_r;
+wire [55:0] hid_kbd;
+wire [7:0] kb_status = hid_kbd[7:0], kb_dat0 = hid_kbd[15:8], kb_dat1 = hid_kbd[23:16], kb_dat2 = hid_kbd[31:24],
+	kb_dat3 = hid_kbd[39:32], kb_dat4 = hid_kbd[47:40], kb_dat5 = hid_kbd[55:48];
+wire [7:0] ms_x, ms_y, ms_b8;
+wire [2:0] ms_b = ms_b8[2:0];
+wire ms_wr;
+wire [15:0] joy_l16, joy_r16;
+wire [12:0] joy_l = joy_l16[12:0], joy_r = joy_r16[12:0];
 wire matrix_cmd_wr;
 wire [23:0] matrix_cmd;
+wire [1:0] l2_ld_kind;
+wire [7:0] l2_ld_data;
+wire [31:0] l2_ld_addr;
+wire l2_ld_active, l2_ld_wr;
+wire [14*8-1:0] sw;
+wire osd_wr, osd_en, osd_zoom;
+wire [11:0] osd_waddr;
+wire [7:0] osd_wdata;
+wire [23:0] osd_fg, osd_bg;
+wire [1:0] osd_alpha, osd_place;
+wire [4:0] osd_px, osd_ph;
+wire [3:0] osd_py;
+wire [5:0] osd_pw;
+// the disk images on the mounter of kg_mcu2 (the sector interface of img_sdc), see NanoMig below
+wire [7:0] sdc_img_mounted, sdc_rd, sdc_wr;
+wire [63:0] sdc_img_size;
+wire [31:0] sdc_sector;
+wire sdc_busy, sdc_done, sdc_byte_in_strobe;
+wire [8:0] sdc_byte_addr;
+wire [7:0] sdc_byte_in_data, sdc_byte_out_data;
+wire img_active;
+wire sdc_error;
+wire [2:0] sdc_slot;
 
-
-// burst transfers from the mcu (karabas-go-firmware docs/burst_protocol.md)
-wire mcu_burst_ready;
-assign MCU_IO[1] = mcu_burst_ready;
+wire mcu_int;
+assign MCU_IO[1] = mcu_int;
 assign MCU_IO[0] = 1'bz;
 assign MCU_IO[5:2] = 4'bzzzz;
 
-// Rev.G has MCU_SCK on a global clock pin: bursts at up to 32 MHz
-// mcu chip selects: kg_mcu lets a low through at once and a high only after 3 clocks high
-// (CS_FILTER). A short spike on a chip select (the sram outputs switch next to them all the
-// time) reset the spi receivers in the middle of a frame: the frame got lost in both directions.
-kg_mcu #(.BURST_MAX_MHZ(32), .CS_FILTER(3), .ENABLE_IMG(1)) mcu(
+// the switches: the index of an item in "osd" of core.json (the DF items of Mini G 0-3): 4 HDD0,
+// 8 Chipset, 9 Chip RAM, 10 Slow RAM, 11 Fast RAM, 12 Video, 13 Reset; defaults HDD0 CF card, Slow
+// RAM 512K
+kg_mcu2 #(
+	.SW_N(14),
+	.SW_INIT({ 24'd0, 8'd1, 24'd0, 8'd1, 32'd0 }),
+	.CS_FILTER(3),
+	.ENABLE_OSD(1),
+	.ENABLE_IMG(1),      // DF0-DF3 (slots 0-3), HDF0 / HDF1 (4, 5)
+	.IMG_OUT_LATENCY(3),
+	.ENABLE_RTC(1),      // rtc_mode 3: the MSM6242B of minimig
+	.ENABLE_AUX(1),      // the level meters of the dot matrix
+	.ENABLE_FT(0),
+	.ENABLE_SD2(0)
+) mcu (
 	.CLK(clk_sys),
 	.N_RESET(~areset),
 
+	.MCU_SCK(MCU_SCK),
 	.MCU_MOSI(MCU_MOSI),
 	.MCU_MISO(MCU_MISO),
-	.MCU_SCK(MCU_SCK),
 	.MCU_SS(MCU_CS_N),
-	.MCU_SPI_FT_SS(MCU_IO[3]),
-	.MCU_SPI_SD2_SS(MCU_IO[2]),
-	.MCU_BURST_CS_N(MCU_IO[0]),
-	.MCU_BURST_READY(mcu_burst_ready),
+	.MCU_INT(mcu_int),
+	.MCU_SPI_FT_SS(1'b1),
+	.MCU_SPI_SD2_SS(1'b1),
 
-	.MS_X(ms_x),
-	.MS_Y(ms_y),
-	.MS_B(ms_b),
-	.MS_Z(),
-	.MS_UPD(ms_upd),
+	.SW(sw), .SW_WR(), .SW_INDEX(), .SW_VALUE(), .HW_ID(), .DVI_ONLY(dvi_only), .CORE_BUILD(), .FW_BUILD(),
+	.BUSY(mcu_busy), .BTNS(), .RELOAD_REQ(1'b0), .RELOAD_CORE(8'd0),
 
-	.KB_STATUS(kb_status),
-	.KB_DAT0(kb_dat0),
-	.KB_DAT1(kb_dat1),
-	.KB_DAT2(kb_dat2),
-	.KB_DAT3(kb_dat3),
-	.KB_DAT4(kb_dat4),
-	.KB_DAT5(kb_dat5),
+	.KBD(hid_kbd), .KBD_WR(), .PS2_CODE(), .PS2_KIND(), .PS2_WR(),
+	.MS_X(ms_x), .MS_Y(ms_y), .MS_Z(), .MS_B(ms_b8), .MS_WR(ms_wr),
+	.JOY_L(joy_l16), .JOY_R(joy_r16), .JOY_WR(),
+	.PS2_CMD(16'h0000), .PS2_CMD_WR(1'b0),
 
-	.JOY_L(joy_l),
-	.JOY_R(joy_r),
+	.LD_KIND(l2_ld_kind), .LD_SLOT(), .LD_SIZE(), .LD_START(), .LD_ACTIVE(l2_ld_active), .LD_END(),
+	.LD_ADDR(l2_ld_addr), .LD_DATA(l2_ld_data), .LD_WR(l2_ld_wr), .LD_READY(1'b1),
 
-	.RTC_A({ 4'h0, rtc_a }),
-	.RTC_DI({ 4'h0, rtc_wdata }),
-	.RTC_DO(rtc_rdata8),
-	.RTC_CS(rtc_wr),
-	.RTC_WR_N(~rtc_wr),
+	.OSD_WR(osd_wr), .OSD_WADDR(osd_waddr), .OSD_WDATA(osd_wdata), .OSD_EN(osd_en),
+	.OSD_FG(osd_fg), .OSD_BG(osd_bg), .OSD_ALPHA(osd_alpha), .OSD_PX(osd_px), .OSD_PY(osd_py),
+	.OSD_PW(osd_pw), .OSD_PH(osd_ph), .OSD_PLACE(osd_place), .OSD_ZOOM(osd_zoom),
 
-	.UART_RX_DATA(),
-	.UART_RX_IDX(),
-	.UART_TX_DATA(8'h00),
-	.UART_TX_WR(1'b0),
-	.UART_TX_MODE(1'b0),
-	.UART_DLM(8'h00),
-	.UART_DLL(8'h00),
-	.UART_DLM_WR(1'b0),
-	.UART_DLL_WR(1'b0),
-	.DEBUG_ADDR(16'h0000),
-	.DEBUG_DATA(16'h0000),
+	.SDC_IMG_MOUNTED(sdc_img_mounted), .SDC_IMG_SIZE(sdc_img_size),
+	.SDC_RD(sdc_rd), .SDC_WR(sdc_wr), .SDC_SECTOR(sdc_sector),
+	.SDC_BUSY(sdc_busy), .SDC_DONE(sdc_done), .SDC_ERROR(sdc_error), .SDC_SLOT(sdc_slot),
+	.SDC_BYTE_IN_STROBE(sdc_byte_in_strobe), .SDC_BYTE_ADDR(sdc_byte_addr),
+	.SDC_BYTE_IN_DATA(sdc_byte_in_data), .SDC_BYTE_OUT_DATA(sdc_byte_out_data),
+	.IMG_WP(), .IMG_PHYS_WR(), .IMG_PHYS(), .IMG_FLUSH(), .FDD_CHNG_WR(), .FDD_CHNG(),
+	.FDD_CHNG_REQ(1'b0), .FDD_CHNG_DS(2'd0),
+	.BK_MOUNT(1'b0), .BK_FLUSHED(1'b0), .BK_SLOT(3'd0), .BK_SIZE(32'd0), .BK_KIND(8'd0), .BK_RESULT(8'd0),
+	.IMG_ACTIVE(img_active),
 
-	.ROMLOADER_ACTIVE(romloader_act),
-	.ROMLOAD_ADDR(romloader_addr),
-	.ROMLOAD_DATA(romloader_data),
-	.ROMLOAD_WR(romloader_wr),
-	.IOCTL_ACTIVE(ioctl_act),
+	.PORT_OUT_DATA(), .PORT_OUT_WR(), .PORT_OUT_READY(4'b1111), .PORT_IN_DATA(32'd0), .PORT_IN_WR(4'd0),
+	.PORT_CFG(128'd0), .PORT_IN_FULL(), .PORT_STAT(), .PORT_STAT_WR(),
+	.RTC_A({ 4'h0, rtc_a }), .RTC_DI({ 4'h0, rtc_wdata }), .RTC_CS(rtc_wr), .RTC_WR_N(~rtc_wr), .RTC_DO(rtc_rdata8),
+	.MATRIX_CMD(matrix_cmd), .MATRIX_CMD_WR(matrix_cmd_wr), .DEBUG_ADDR(16'd0), .DEBUG_DATA(16'd0),
 
-	.SOFTSW_COMMAND(softsw_command),
-	.OSD_COMMAND(osd_command),
-
-	.FT_MISO(1'b1),
-	.SD2_MISO(1'b1),
-
-	.MATRIX_CMD(matrix_cmd),
-	.MATRIX_CMD_WR(matrix_cmd_wr),
-
-	.IMG_MOUNTED(img_mounted),
-	.IMG_SIZE(img_size),
-	.IMG_DATA_WR(img_data_wr),
-	.IMG_DATA_ADDR(img_data_addr),
-	.IMG_DATA(img_data),
-	.IMG_RESULT_WR(img_result_wr),
-	.IMG_RESULT(img_result),
-	.IMG_SUM(img_sum),
-	.IMG_Q_WR(img_q_wr),
-	.IMG_Q_DI(img_q_di),
-	.IMG_Q_ACK(img_q_ack),
-
-	.HWID(),
-	.DVI_ONLY(dvi_only),
-
-	.BUSY(mcu_busy)
+	.FT_SPI_ON(), .FT_VGA_ON(), .FT_RESET(), .FT_SCK(), .FT_MOSI(), .FT_MISO(1'b1), .FT_CS_N(),
+	.SD2_SCK(), .SD2_MOSI(), .SD2_MISO(1'b1), .SD2_CS_N()
 );
 
-//---------- Soft switches (the order of the osd items in core_minig.json) ------------
-// items 0-3 are the file mounters DF0-DF3, items 5-6 the HDF files HDF0 / HDF1 and item 7 the
-// Kickstart file (no switches); Reset is always the last item
+// the loads of v2: LD kind 0 the ROMs of the core file, kind 2 the Kickstart file (FL slot 7):
+// the rom loader signals of v1 (ioctl_act for the Kickstart, as before)
+wire romloader_act = l2_ld_active && l2_ld_kind == 2'd0;
+wire ioctl_act = l2_ld_active && l2_ld_kind == 2'd2;
+wire romloader_wr = l2_ld_wr && (l2_ld_kind == 2'd0 || l2_ld_kind == 2'd2);
+wire [31:0] romloader_addr = l2_ld_addr;
+wire [7:0] romloader_data = l2_ld_data;
 
-reg [1:0] sw_hdd = 2'd0;       // IDE device 0 (Gayle): 0 = off, 1 = the CF card, 2 = the HDF0 image
-reg [1:0] sw_chipset = 2'd0;   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
-reg [1:0] sw_chipmem = 2'd0;   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
-reg [1:0] sw_slowmem = 2'd1;   // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
-reg [1:0] sw_fastmem = 2'd0;   // Zorro II fast RAM (sdram): 0 = none, 1 = 2M, 2 = 4M, 3 = 8M
-reg       sw_ntsc = 1'b0;
-reg       sw_reset = 1'b0;
-reg [15:0] prev_softsw_command = 16'hFFFF;
+// the mouse: the MS_WR pulse of v2 as the toggle of v1 (hid_amiga takes a change of it)
+reg ms_upd = 1'b0;
+always @(posedge clk_sys) if (ms_wr) ms_upd <= ~ms_upd;
 
-always @(posedge clk_sys) begin
-	if (prev_softsw_command != softsw_command) begin
-		prev_softsw_command <= softsw_command;
-		case (softsw_command[15:8])
-			8'h04: sw_hdd <= softsw_command[1:0];
-			8'h08: sw_chipset <= softsw_command[1:0];
-			8'h09: sw_chipmem <= softsw_command[1:0];
-			8'h0A: sw_slowmem <= softsw_command[1:0];
-			8'h0B: sw_fastmem <= softsw_command[1:0];
-			8'h0C: sw_ntsc <= softsw_command[0];
-			8'h0D: sw_reset <= softsw_command[0];
-			default: ;
-		endcase
-	end
-end
+//---------- Soft switches (the SW registers of kg_mcu2) ------------
+
+wire [1:0] sw_hdd = sw[4*8 +: 2];       // IDE device 0 (Gayle): 0 = off, 1 = the CF card, 2 = the HDF0 image
+wire [1:0] sw_chipset = sw[8*8 +: 2];   // 0 = OCS-A500, 1 = OCS-A1000, 2 = ECS
+wire [1:0] sw_chipmem = sw[9*8 +: 2];   // 0 = 512K, 1 = 1M, 2 = 1.5M, 3 = 2M
+wire [1:0] sw_slowmem = sw[10*8 +: 2];  // 0 = none, 1 = 512K, 2 = 1M, 3 = 1.5M
+wire [1:0] sw_fastmem = sw[11*8 +: 2];  // Zorro II fast RAM (sdram): 0 = none, 1 = 2M, 2 = 4M, 3 = 8M
+wire       sw_ntsc = sw[12*8];
+wire       sw_reset = sw[13*8];
 
 //---------- Keyboard and mouse ------------
 
@@ -378,15 +364,6 @@ wire cpu_reset = |reset_cnt;
 
 //---------- NanoMig ------------
 
-wire [7:0] sdc_img_mounted, sdc_rd, sdc_wr;
-wire [63:0] sdc_img_size;
-wire [31:0] sdc_sector;
-wire sdc_busy, sdc_done, sdc_byte_in_strobe;
-wire [8:0] sdc_byte_addr;
-wire [7:0] sdc_byte_in_data, sdc_byte_out_data;
-wire img_active;
-wire sdc_error;
-wire [2:0] sdc_slot;           // the sdc index img_sdc serves
 wire [7:0] fdc_rd, fdc_wr;     // nanomig: the floppies, sdc index 0-3
 wire [31:0] fdc_sector;
 wire [7:0] fdc_out_data;
@@ -615,40 +592,7 @@ ODDR2 #(.DDR_ALIGNMENT("NONE"), .INIT(1'b0), .SRTYPE("SYNC")) u_sdr_clk (
 	.S(1'b0)
 );
 
-//---------- Disk images (file mounter of the mcu) ------------
-
-img_sdc img_sdc(
-	.clk(clk_sys),
-	.reset(areset),
-
-	.img_mounted(img_mounted),
-	.img_size(img_size),
-	.img_data_wr(img_data_wr),
-	.img_data_addr(img_data_addr),
-	.img_data(img_data),
-	.img_result_wr(img_result_wr),
-	.img_result(img_result),
-	.img_sum(img_sum),
-	.img_q_wr(img_q_wr),
-	.img_q_di(img_q_di),
-	.img_q_ack(img_q_ack),
-
-	.sdc_img_mounted(sdc_img_mounted),
-	.sdc_img_size(sdc_img_size),
-	.sdc_rd(sdc_rd),
-	.sdc_wr(sdc_wr),
-	.sdc_sector(sdc_sector),
-	.sdc_busy(sdc_busy),
-	.sdc_done(sdc_done),
-	.sdc_error(sdc_error),
-	.sdc_slot(sdc_slot),
-	.sdc_byte_in_strobe(sdc_byte_in_strobe),
-	.sdc_byte_addr(sdc_byte_addr),
-	.sdc_byte_in_data(sdc_byte_in_data),
-	.sdc_byte_out_data(sdc_byte_out_data),
-
-	.active(img_active)
-);
+//---------- Disk images: the mounter of kg_mcu2 (above) ------------
 
 //---------- SRAM ------------
 
@@ -808,16 +752,18 @@ audio_peaks audio_peaks(
 	.cmd(matrix_cmd)
 );
 
-// osd overlay (menus of the mcu), on the 31 kHz picture before hdmi; 4 characters left of and one
-// row above the tsconf position (120 / 72)
+// the bitmap OSD of link v2 (kg_l2_osd_overlay): centred in de, 2 clocks of latency with its syncs and de
 wire [23:0] osd_rgb;
-overlay #(.H_OFFSET(120 - 4*8), .V_OFFSET(72 - 8)) overlay(
-	.CLK(clk_sys),
-	.RGB_I(hdmi_rgb),
-	.RGB_O(osd_rgb),
-	.HSYNC_I(hdmi_hs),
-	.VSYNC_I(hdmi_vs),
-	.OSD_COMMAND(osd_command)
+wire osd_hs, osd_vs, osd_de;
+kg_l2_osd_overlay osd (
+	.wclk(clk_sys),
+	.osd_wr(osd_wr), .osd_waddr(osd_waddr), .osd_wdata(osd_wdata), .osd_en(osd_en),
+	.osd_fg(osd_fg), .osd_bg(osd_bg), .osd_alpha(osd_alpha), .osd_px(osd_px), .osd_py(osd_py),
+	.osd_pw(osd_pw), .osd_ph(osd_ph), .osd_place(osd_place), .osd_zoom(osd_zoom),
+	.icon_on(8'd0), .icon_act(8'd0),
+	.clk(clk_sys),
+	.rgb_i(hdmi_rgb), .hs_i(hdmi_hs), .vs_i(hdmi_vs), .de_i(hdmi_de),
+	.rgb_o(osd_rgb), .hs_o(osd_hs), .vs_o(osd_vs), .de_o(osd_de)
 );
 
 zhdmi_top #(.SAMPLERATE(48000)) zhdmi_top(
@@ -825,9 +771,9 @@ zhdmi_top #(.SAMPLERATE(48000)) zhdmi_top(
 	.ds80(1'b0),
 	.reset(areset),
 	.vga_rgb(osd_rgb),
-	.vga_hs(hdmi_hs),
-	.vga_vs(hdmi_vs),
-	.vga_de(hdmi_de),
+	.vga_hs(osd_hs),
+	.vga_vs(osd_vs),
+	.vga_de(osd_de),
 	.audio_en(~dvi_only),
 	.audio_l(audio_l),
 	.audio_r(audio_r),
@@ -835,7 +781,7 @@ zhdmi_top #(.SAMPLERATE(48000)) zhdmi_top(
 	.tmds_n(TMDS_N)
 );
 
-PCM5102 #(.DAC_CLK_DIV_BITS(2)) pcm5102(
+kg_pcm5102 #(.DIV_BITS(2)) pcm5102(
 	.clk(clk_sys),
 	.reset(areset),
 	.left(audio_l),
