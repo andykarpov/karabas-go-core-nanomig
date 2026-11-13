@@ -9,9 +9,9 @@
     "rtc_mode": 3,
     "roms": [],
     "boards": {
-        "go": {"bitstream": "karabas_go.bin"},
-        "mini": {"bitstream": "karabas_mini.bin"},
-        "minig": {"bitstream": "karabas_minig.bin"}
+        "go": {"link": 2, "build": "26111325", "bitstream": "karabas_go.bin"},
+        "mini": {"link": 2, "build": "26111325", "bitstream": "karabas_mini.bin"},
+        "minig": {"link": 2, "build": "26111324", "bitstream": "karabas_minig.bin"}
     },
     "osd": [
     {"type": "F", "name": "DF0", "slot": 0, "extensions": ".adf", "hotkey": "Menu+F1", "physical": 1, "boards": ["go"]},
